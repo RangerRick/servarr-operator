@@ -100,12 +100,7 @@ async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Action, 
                 warn!(%name, error = %msg, "split4k validation failed");
                 let now = chrono_now();
                 let mut status = MediaStackStatus::default();
-                status.set_condition(Condition::fail(
-                    "Valid",
-                    "InvalidSplit4k",
-                    &msg,
-                    &now,
-                ));
+                status.set_condition(Condition::fail("Valid", "InvalidSplit4k", &msg, &now));
                 status.observed_generation = stack.metadata.generation.unwrap_or(0);
                 patch_status(client, &ns, &name, &status).await?;
                 increment_stack_reconcile_total("error");

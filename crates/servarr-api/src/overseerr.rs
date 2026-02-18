@@ -31,9 +31,7 @@ impl OverseerrClient {
     }
 
     /// List all Sonarr server registrations.
-    pub async fn list_sonarr(
-        &self,
-    ) -> Result<Vec<overseerr::models::SonarrSettings>, ApiError> {
+    pub async fn list_sonarr(&self) -> Result<Vec<overseerr::models::SonarrSettings>, ApiError> {
         overseerr::apis::settings_api::list_sonarr(&self.config)
             .await
             .map_err(map_err)
@@ -69,9 +67,7 @@ impl OverseerrClient {
     }
 
     /// List all Radarr server registrations.
-    pub async fn list_radarr(
-        &self,
-    ) -> Result<Vec<overseerr::models::RadarrSettings>, ApiError> {
+    pub async fn list_radarr(&self) -> Result<Vec<overseerr::models::RadarrSettings>, ApiError> {
         overseerr::apis::settings_api::list_radarr(&self.config)
             .await
             .map_err(map_err)

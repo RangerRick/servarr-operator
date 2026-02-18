@@ -12,6 +12,7 @@ use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder};
 use kube::runtime::watcher;
 use kube::{Client, CustomResourceExt, Resource, ResourceExt};
+use servarr_api::AppKind;
 use servarr_crds::{AppType, Condition, ServarrApp, ServarrAppStatus, condition_types};
 use thiserror::Error;
 use tokio::time::Duration;
@@ -22,6 +23,16 @@ use crate::metrics::{
     increment_backup_operations, increment_drift_corrections, increment_reconcile_total,
     observe_reconcile_duration, set_managed_apps,
 };
+
+fn app_type_to_kind(app_type: &AppType) -> AppKind {
+    match app_type {
+        AppType::Sonarr => AppKind::Sonarr,
+        AppType::Radarr => AppKind::Radarr,
+        AppType::Lidarr => AppKind::Lidarr,
+        AppType::Prowlarr => AppKind::Prowlarr,
+        other => panic!("AppKind not supported for {other:?}"),
+    }
+}
 
 const FIELD_MANAGER: &str = "servarr-operator";
 
@@ -394,9 +405,7 @@ async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Er
         && sync_spec.enabled
     {
         let target_ns = sync_spec.namespace_scope.as_deref().unwrap_or(&ns);
-        if let Err(e) =
-            sync_overseerr_servers(client, &app, target_ns, &recorder, &obj_ref).await
-        {
+        if let Err(e) = sync_overseerr_servers(client, &app, target_ns, &recorder, &obj_ref).await {
             warn!(%name, error = %e, "Overseerr sync failed");
         }
     }
@@ -494,7 +503,11 @@ async fn check_api_health(
     use servarr_api::HealthCheck;
     let (healthy, update_cond): (Result<bool, String>, Option<Condition>) = match app.spec.app {
         AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr => {
-            match servarr_api::ServarrClient::new(&base_url, &api_key) {
+            match servarr_api::ServarrClient::new(
+                &base_url,
+                &api_key,
+                app_type_to_kind(&app.spec.app),
+            ) {
                 Ok(c) => {
                     let h = c.is_healthy().await.map_err(|e| e.to_string());
                     let uc = check_update_available(&c, &now).await;
@@ -810,15 +823,17 @@ async fn maybe_run_backup(
     let port = svc_spec.ports.first().map(|p| p.port).unwrap_or(80);
     let base_url = format!("http://{app_name}.{ns}.svc:{port}");
 
-    let api_client = match servarr_api::ServarrClient::new(&base_url, &api_key) {
-        Ok(c) => c,
-        Err(e) => {
-            return Some(servarr_crds::BackupStatus {
-                last_backup_result: Some(format!("client error: {e}")),
-                ..Default::default()
-            });
-        }
-    };
+    let api_client =
+        match servarr_api::ServarrClient::new(&base_url, &api_key, app_type_to_kind(&app.spec.app))
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return Some(servarr_crds::BackupStatus {
+                    last_backup_result: Some(format!("client error: {e}")),
+                    ..Default::default()
+                });
+            }
+        };
 
     let app_type = app.spec.app.as_str();
     let _ = recorder
@@ -1006,17 +1021,19 @@ async fn maybe_restore_backup(
     let base_url = format!("http://{app_name}.{ns}.svc:{port}");
 
     // Only Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) support backup/restore
-    let restore_result = match servarr_api::ServarrClient::new(&base_url, &api_key) {
-        Ok(c) => c.restore_backup(backup_id).await,
-        Err(e) => {
-            warn!(%name, error = %e, "failed to create API client for restore");
-            let scale_up = serde_json::json!({ "spec": { "replicas": 1 } });
-            let _ = deploy_api
-                .patch(name, &PatchParams::default(), &Patch::Merge(scale_up))
-                .await;
-            return;
-        }
-    };
+    let restore_result =
+        match servarr_api::ServarrClient::new(&base_url, &api_key, app_type_to_kind(&app.spec.app))
+        {
+            Ok(c) => c.restore_backup(backup_id).await,
+            Err(e) => {
+                warn!(%name, error = %e, "failed to create API client for restore");
+                let scale_up = serde_json::json!({ "spec": { "replicas": 1 } });
+                let _ = deploy_api
+                    .patch(name, &PatchParams::default(), &Patch::Merge(scale_up))
+                    .await;
+                return;
+            }
+        };
 
     match restore_result {
         Ok(()) => {
@@ -1405,8 +1422,7 @@ async fn sync_overseerr_servers(
         .api_key_secret
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Overseerr sync requires api_key_secret"))?;
-    let overseerr_key =
-        servarr_api::read_secret_key(client, &ns, secret_name, "api-key").await?;
+    let overseerr_key = servarr_api::read_secret_key(client, &ns, secret_name, "api-key").await?;
 
     let overseerr_app_name = servarr_resources::common::app_name(overseerr);
     let defaults = servarr_crds::AppDefaults::for_app(&overseerr.spec.app);
@@ -1459,13 +1475,9 @@ async fn sync_overseerr_servers(
                     let four_k = sonarr_defaults.and_then(|d| d.four_k.as_ref());
                     (
                         four_k.map(|f| f.profile_id).unwrap_or(0.0),
-                        four_k
-                            .map(|f| f.profile_name.clone())
-                            .unwrap_or_default(),
+                        four_k.map(|f| f.profile_name.clone()).unwrap_or_default(),
                         four_k.map(|f| f.root_folder.clone()).unwrap_or_default(),
-                        four_k
-                            .and_then(|f| f.enable_season_folders)
-                            .unwrap_or(true),
+                        four_k.and_then(|f| f.enable_season_folders).unwrap_or(true),
                     )
                 } else {
                     (
@@ -1523,9 +1535,7 @@ async fn sync_overseerr_servers(
                     let four_k = radarr_defaults.and_then(|d| d.four_k.as_ref());
                     (
                         four_k.map(|f| f.profile_id).unwrap_or(0.0),
-                        four_k
-                            .map(|f| f.profile_name.clone())
-                            .unwrap_or_default(),
+                        four_k.map(|f| f.profile_name.clone()).unwrap_or_default(),
                         four_k.map(|f| f.root_folder.clone()).unwrap_or_default(),
                         four_k
                             .and_then(|f| f.minimum_availability.clone())
@@ -1639,10 +1649,7 @@ async fn overseerr_sync_exists(client: &Client, namespace: &str) -> bool {
     match api.list(&ListParams::default()).await {
         Ok(list) => list.iter().any(|a| {
             a.spec.app == AppType::Overseerr
-                && a.spec
-                    .overseerr_sync
-                    .as_ref()
-                    .is_some_and(|s| s.enabled)
+                && a.spec.overseerr_sync.as_ref().is_some_and(|s| s.enabled)
         }),
         Err(_) => false,
     }
@@ -1660,7 +1667,11 @@ async fn cleanup_overseerr_registration(
 
     let app_name_str = servarr_resources::common::app_name(app);
     let defaults_for_app = servarr_crds::AppDefaults::for_app(&app.spec.app);
-    let svc_spec = app.spec.service.as_ref().unwrap_or(&defaults_for_app.service);
+    let svc_spec = app
+        .spec
+        .service
+        .as_ref()
+        .unwrap_or(&defaults_for_app.service);
     let port = svc_spec.ports.first().map(|p| p.port).unwrap_or(80);
     let app_hostname = format!("{app_name_str}.{namespace}.svc");
 
@@ -1669,10 +1680,7 @@ async fn cleanup_overseerr_registration(
     let apps = sa_api.list(&ListParams::default()).await?;
     let overseerr = apps.iter().find(|a| {
         a.spec.app == AppType::Overseerr
-            && a.spec
-                .overseerr_sync
-                .as_ref()
-                .is_some_and(|s| s.enabled)
+            && a.spec.overseerr_sync.as_ref().is_some_and(|s| s.enabled)
     });
 
     let overseerr = match overseerr {
@@ -1697,8 +1705,7 @@ async fn cleanup_overseerr_registration(
         .as_ref()
         .unwrap_or(&overseerr_defaults.service);
     let overseerr_port = overseerr_svc.ports.first().map(|p| p.port).unwrap_or(80);
-    let overseerr_url =
-        format!("http://{overseerr_app_name}.{overseerr_ns}.svc:{overseerr_port}");
+    let overseerr_url = format!("http://{overseerr_app_name}.{overseerr_ns}.svc:{overseerr_port}");
 
     let overseerr_client = servarr_api::OverseerrClient::new(&overseerr_url, &overseerr_key);
 
@@ -1723,10 +1730,7 @@ async fn cleanup_overseerr_registration(
                         &Event {
                             type_: EventType::Normal,
                             reason: "OverseerrCleanup".into(),
-                            note: Some(format!(
-                                "Removed {} from Overseerr",
-                                app.name_any()
-                            )),
+                            note: Some(format!("Removed {} from Overseerr", app.name_any())),
                             action: "Finalize".into(),
                             secondary: None,
                         },
@@ -1754,10 +1758,7 @@ async fn cleanup_overseerr_registration(
                         &Event {
                             type_: EventType::Normal,
                             reason: "OverseerrCleanup".into(),
-                            note: Some(format!(
-                                "Removed {} from Overseerr",
-                                app.name_any()
-                            )),
+                            note: Some(format!("Removed {} from Overseerr", app.name_any())),
                             action: "Finalize".into(),
                             secondary: None,
                         },
