@@ -1,0 +1,276 @@
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Stage 1: Fast lint (seconds) ─────────────────────────────────
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@e58ee9d111489c31395fbe4857b0be6e7635dbda # v1.70.0
+
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@0dce2577a4760a2749d8cfb7a84b7d5585ebcb7d # v0.5.0
+        with:
+          advanced-security: false
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Lint operator chart
+        run: |
+          helm lint chart/
+          helm template test chart/ > /dev/null
+
+  # ── Stage 2: Analysis + Build (parallel) ────────────────────────
+  clippy:
+    needs: [fmt, actionlint, zizmor]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    needs: [fmt, actionlint, zizmor]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+
+      - name: Run tests
+        run: cargo test --workspace
+
+  # Build: compile on runner (cached), package into minimal Docker image.
+  # Runs in parallel with clippy/test to eliminate serial wait.
+  build:
+    needs: [fmt, actionlint, zizmor]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          cache-on-failure: true
+          key: musl
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Build static release binary
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin servarr-operator
+
+      - name: Package Docker image
+        run: |
+          cp target/x86_64-unknown-linux-musl/release/servarr-operator /tmp/servarr-operator
+          docker build -t servarr-operator:ci -f- /tmp <<'DOCKERFILE'
+          FROM gcr.io/distroless/static-debian12:nonroot
+          COPY servarr-operator /servarr-operator
+          USER nonroot:nonroot
+          ENTRYPOINT ["/servarr-operator"]
+          DOCKERFILE
+
+      - name: Save Docker image as artifact
+        run: docker save servarr-operator:ci | gzip > /tmp/servarr-operator-ci.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-image
+          path: /tmp/servarr-operator-ci.tar.gz
+          retention-days: 1
+
+  # ── Stage 3: Integration smoke test ─────────────────────────────
+  smoke-test:
+    needs: [build, clippy, test, helm-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download operator image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: operator-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: gunzip -c /tmp/servarr-operator-ci.tar.gz | docker load
+
+      # Cache each app image as a separate file so that bumping one tag
+      # only re-pulls that single image instead of invalidating ~3GB.
+      - name: Compute per-image cache key
+        id: image-cache-key
+        run: |
+          hash=$(sha256sum image-defaults.toml | cut -d' ' -f1)
+          echo "key=app-images-${hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached app images
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/app-images
+          key: ${{ steps.image-cache-key.outputs.key }}
+          restore-keys: app-images-
+
+      - name: Pull missing app images
+        run: |
+          mkdir -p /tmp/app-images
+          # Parse image-defaults.toml into name repo:tag lines
+          images=$(awk -F' *= *' '
+            /^\[/ { name=substr($0,2,length($0)-2) }
+            $1=="repository" { gsub(/"/, "", $2); repo=$2 }
+            $1=="tag" { gsub(/"/, "", $2); tag=$2;
+              if(repo && tag) print name, repo":"tag;
+              repo=""; tag="" }
+          ' image-defaults.toml)
+
+          pulled=0
+          while read -r name image; do
+            safe_name="${name//\//_}"
+            file="/tmp/app-images/${safe_name}.tar.gz"
+            # Check if cached file matches the current image ref
+            marker="/tmp/app-images/${safe_name}.ref"
+            if [[ -f "$file" && -f "$marker" && "$(cat "$marker")" == "$image" ]]; then
+              echo "  ${name}: cached (${image})"
+              continue
+            fi
+            echo "  ${name}: pulling ${image}"
+            docker pull --platform linux/amd64 "$image"
+            docker save "$image" | gzip > "$file"
+            echo "$image" > "$marker"
+            pulled=$((pulled + 1))
+          done <<< "$images"
+          echo "Pulled ${pulled} image(s), $(echo "$images" | wc -l | tr -d ' ') total"
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: kind
+          wait: 120s
+
+      # Import directly into containerd, skipping kind's --all-platforms
+      # flag which fails on multi-platform image manifests.
+      - name: Load images into kind
+        run: |
+          ctr_import="docker exec -i kind-control-plane ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -"
+          docker save servarr-operator:ci | $ctr_import
+          for img in /tmp/app-images/*.tar.gz; do
+            gunzip -c "$img" | $ctr_import
+          done
+
+      - name: Install operator via Helm
+        run: |
+          helm template smoke chart/ \
+            --set image.repository=servarr-operator \
+            --set image.tag=ci \
+            --set image.pullPolicy=Never \
+            --set webhook.enabled=false \
+            | kubectl apply -f -
+
+      - name: Wait for operator rollout
+        run: kubectl rollout status deployment/servarr-operator --timeout=120s
+
+      - name: Apply ServarrApp CRs
+        run: kubectl apply -f .github/smoke-test/manifests/
+
+      - name: Run smoke tests
+        run: bash .github/smoke-test/smoke-test.sh
+
+      - name: Dump debug info on failure
+        if: failure()
+        run: |
+          echo "=== Node resources ==="
+          kubectl top nodes 2>/dev/null || kubectl describe nodes | grep -A 10 'Allocated resources' || true
+          echo ""
+          echo "=== Node conditions ==="
+          kubectl get nodes -o wide || true
+          kubectl describe nodes | grep -E '(Conditions:|MemoryPressure|DiskPressure|PIDPressure|Ready)' || true
+          echo ""
+          echo "=== Operator logs ==="
+          kubectl logs deployment/servarr-operator --tail=100 || true
+          echo ""
+          echo "=== Pod status ==="
+          kubectl get pods -A -o wide || true
+          echo ""
+          echo "=== Unhealthy pod logs (non-running, restarted, or not-ready) ==="
+          kubectl get pods --no-headers -o custom-columns=':metadata.name,:status.phase,:status.containerStatuses[*].restartCount,:status.containerStatuses[*].ready' | \
+            awk '$2 != "Running" || ($3+0) > 0 || $4 != "true" {print $1}' | while read -r pod; do
+            echo "--- $pod (previous) ---"
+            kubectl logs "$pod" --all-containers --previous --tail=50 2>/dev/null || true
+            echo "--- $pod (current) ---"
+            kubectl logs "$pod" --all-containers --tail=80 2>/dev/null || true
+            echo ""
+          done
+          echo "=== Events ==="
+          kubectl get events --sort-by='.lastTimestamp' || true
+          echo ""
+          echo "=== ServarrApp status ==="
+          kubectl get servarrapps -o yaml || true

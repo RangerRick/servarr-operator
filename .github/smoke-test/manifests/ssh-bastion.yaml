@@ -1,0 +1,22 @@
+apiVersion: servarr.dev/v1alpha1
+kind: ServarrApp
+metadata:
+  name: ssh-bastion
+spec:
+  app: SshBastion
+  appConfig:
+    sshBastion:
+      mode: restricted-rsync
+      enablePasswordAuth: false
+      tcpForwarding: false
+      gatewayPorts: false
+      restrictedRsync:
+        readOnly: true
+        allowedPaths:
+          - /opt
+      users:
+        - name: testuser
+          uid: 1000
+          gid: 1000
+          publicKeys: |
+            ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@example.com
