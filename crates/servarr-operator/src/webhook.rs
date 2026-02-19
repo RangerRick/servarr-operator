@@ -507,3 +507,689 @@ fn parse_memory(s: &str) -> Option<u64> {
     }
     s.parse().ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use servarr_crds::*;
+
+    // ── Helper to build a minimal ServarrAppSpec ──
+
+    fn minimal_spec(app: AppType) -> ServarrAppSpec {
+        ServarrAppSpec {
+            app,
+            ..Default::default()
+        }
+    }
+
+    // ── parse_cpu ──
+
+    #[test]
+    fn parse_cpu_empty_string() {
+        assert_eq!(parse_cpu(""), None);
+    }
+
+    #[test]
+    fn parse_cpu_millicores() {
+        assert_eq!(parse_cpu("500m"), Some(500));
+    }
+
+    #[test]
+    fn parse_cpu_whole_cores() {
+        assert_eq!(parse_cpu("1"), Some(1000));
+    }
+
+    #[test]
+    fn parse_cpu_fractional_cores() {
+        assert_eq!(parse_cpu("2.5"), Some(2500));
+    }
+
+    #[test]
+    fn parse_cpu_quarter_core() {
+        assert_eq!(parse_cpu("0.25"), Some(250));
+    }
+
+    #[test]
+    fn parse_cpu_100m() {
+        assert_eq!(parse_cpu("100m"), Some(100));
+    }
+
+    // ── parse_memory ──
+
+    #[test]
+    fn parse_memory_empty_string() {
+        assert_eq!(parse_memory(""), None);
+    }
+
+    #[test]
+    fn parse_memory_raw_bytes() {
+        assert_eq!(parse_memory("1024"), Some(1024));
+    }
+
+    #[test]
+    fn parse_memory_ki() {
+        assert_eq!(parse_memory("1Ki"), Some(1024));
+    }
+
+    #[test]
+    fn parse_memory_mi() {
+        assert_eq!(parse_memory("1Mi"), Some(1_048_576));
+    }
+
+    #[test]
+    fn parse_memory_gi() {
+        assert_eq!(parse_memory("1Gi"), Some(1_073_741_824));
+    }
+
+    #[test]
+    fn parse_memory_ti() {
+        assert_eq!(parse_memory("1Ti"), Some(1_099_511_627_776));
+    }
+
+    #[test]
+    fn parse_memory_k_decimal() {
+        assert_eq!(parse_memory("1K"), Some(1_000));
+    }
+
+    #[test]
+    fn parse_memory_m_decimal() {
+        assert_eq!(parse_memory("1M"), Some(1_000_000));
+    }
+
+    #[test]
+    fn parse_memory_g_decimal() {
+        assert_eq!(parse_memory("1G"), Some(1_000_000_000));
+    }
+
+    #[test]
+    fn parse_memory_t_decimal() {
+        assert_eq!(parse_memory("1T"), Some(1_000_000_000_000));
+    }
+
+    #[test]
+    fn parse_memory_512mi() {
+        assert_eq!(parse_memory("512Mi"), Some(536_870_912));
+    }
+
+    // ── validate_app_config_match ──
+
+    #[test]
+    fn app_config_match_no_config() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_transmission_ok() {
+        let mut spec = minimal_spec(AppType::Transmission);
+        spec.app_config = Some(AppConfig::Transmission(TransmissionConfig::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_sabnzbd_ok() {
+        let mut spec = minimal_spec(AppType::Sabnzbd);
+        spec.app_config = Some(AppConfig::Sabnzbd(SabnzbdConfig::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_prowlarr_ok() {
+        let mut spec = minimal_spec(AppType::Prowlarr);
+        spec.app_config = Some(AppConfig::Prowlarr(ProwlarrConfig::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_mismatch() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.app_config = Some(AppConfig::Transmission(TransmissionConfig::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("does not match app type"));
+    }
+
+    // ── validate_port_ranges ──
+
+    #[test]
+    fn port_ranges_valid_port() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.service = Some(ServiceSpec {
+            ports: vec![ServicePort {
+                name: "http".into(),
+                port: 8080,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn port_ranges_port_zero() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.service = Some(ServiceSpec {
+            ports: vec![ServicePort {
+                name: "http".into(),
+                port: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("out of range"));
+    }
+
+    #[test]
+    fn port_ranges_port_65536() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.service = Some(ServiceSpec {
+            ports: vec![ServicePort {
+                name: "http".into(),
+                port: 65536,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("out of range"));
+    }
+
+    #[test]
+    fn port_ranges_container_port_out_of_range() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.service = Some(ServiceSpec {
+            ports: vec![ServicePort {
+                name: "http".into(),
+                port: 80,
+                container_port: Some(70000),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("containerPort"));
+    }
+
+    #[test]
+    fn port_ranges_host_port_out_of_range() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.service = Some(ServiceSpec {
+            ports: vec![ServicePort {
+                name: "http".into(),
+                port: 80,
+                host_port: Some(-1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("hostPort"));
+    }
+
+    #[test]
+    fn port_ranges_transmission_peer_port_out_of_range() {
+        let mut spec = minimal_spec(AppType::Transmission);
+        spec.app_config = Some(AppConfig::Transmission(TransmissionConfig {
+            peer_port: Some(PeerPortConfig {
+                port: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        let mut errors = Vec::new();
+        validate_port_ranges(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("peerPort"));
+    }
+
+    // ── validate_resource_bounds ──
+
+    #[test]
+    fn resource_bounds_no_resources() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_resource_bounds(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn resource_bounds_cpu_limit_gte_request() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.resources = Some(ResourceRequirements {
+            limits: ResourceList {
+                cpu: "1".into(),
+                memory: "".into(),
+            },
+            requests: ResourceList {
+                cpu: "500m".into(),
+                memory: "".into(),
+            },
+        });
+        let mut errors = Vec::new();
+        validate_resource_bounds(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn resource_bounds_cpu_limit_lt_request() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.resources = Some(ResourceRequirements {
+            limits: ResourceList {
+                cpu: "250m".into(),
+                memory: "".into(),
+            },
+            requests: ResourceList {
+                cpu: "500m".into(),
+                memory: "".into(),
+            },
+        });
+        let mut errors = Vec::new();
+        validate_resource_bounds(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("limits.cpu"));
+    }
+
+    #[test]
+    fn resource_bounds_memory_limit_lt_request() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.resources = Some(ResourceRequirements {
+            limits: ResourceList {
+                cpu: "".into(),
+                memory: "256Mi".into(),
+            },
+            requests: ResourceList {
+                cpu: "".into(),
+                memory: "512Mi".into(),
+            },
+        });
+        let mut errors = Vec::new();
+        validate_resource_bounds(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("limits.memory"));
+    }
+
+    #[test]
+    fn resource_bounds_empty_cpu_no_error() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.resources = Some(ResourceRequirements {
+            limits: ResourceList {
+                cpu: "".into(),
+                memory: "".into(),
+            },
+            requests: ResourceList {
+                cpu: "".into(),
+                memory: "".into(),
+            },
+        });
+        let mut errors = Vec::new();
+        validate_resource_bounds(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    // ── validate_gateway_hosts ──
+
+    #[test]
+    fn gateway_hosts_disabled() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.gateway = Some(GatewaySpec {
+            enabled: false,
+            hosts: vec![],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_gateway_hosts(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn gateway_hosts_enabled_with_hosts() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.gateway = Some(GatewaySpec {
+            enabled: true,
+            hosts: vec!["sonarr.example.com".into()],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_gateway_hosts(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn gateway_hosts_enabled_empty_hosts() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.gateway = Some(GatewaySpec {
+            enabled: true,
+            hosts: vec![],
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_gateway_hosts(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("non-empty"));
+    }
+
+    // ── validate_unique_volume_names ──
+
+    #[test]
+    fn unique_volume_names_ok() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.persistence = Some(PersistenceSpec {
+            volumes: vec![
+                PvcVolume {
+                    name: "config".into(),
+                    mount_path: "/config".into(),
+                    ..Default::default()
+                },
+                PvcVolume {
+                    name: "data".into(),
+                    mount_path: "/data".into(),
+                    ..Default::default()
+                },
+            ],
+            nfs_mounts: vec![],
+        });
+        let mut errors = Vec::new();
+        validate_unique_volume_names(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn unique_volume_names_duplicate() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.persistence = Some(PersistenceSpec {
+            volumes: vec![
+                PvcVolume {
+                    name: "config".into(),
+                    mount_path: "/config".into(),
+                    ..Default::default()
+                },
+                PvcVolume {
+                    name: "config".into(),
+                    mount_path: "/config2".into(),
+                    ..Default::default()
+                },
+            ],
+            nfs_mounts: vec![],
+        });
+        let mut errors = Vec::new();
+        validate_unique_volume_names(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("duplicate volume name"));
+    }
+
+    #[test]
+    fn unique_volume_names_duplicate_nfs() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.persistence = Some(PersistenceSpec {
+            volumes: vec![],
+            nfs_mounts: vec![
+                NfsMount {
+                    name: "media".into(),
+                    server: "nas".into(),
+                    path: "/media".into(),
+                    mount_path: "/media".into(),
+                    ..Default::default()
+                },
+                NfsMount {
+                    name: "media".into(),
+                    server: "nas".into(),
+                    path: "/media2".into(),
+                    mount_path: "/media2".into(),
+                    ..Default::default()
+                },
+            ],
+        });
+        let mut errors = Vec::new();
+        validate_unique_volume_names(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("duplicate nfsMount name"));
+    }
+
+    // ── validate_transmission_settings ──
+
+    #[test]
+    fn transmission_settings_no_config() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_transmission_settings(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn transmission_settings_no_managed_keys() {
+        let mut spec = minimal_spec(AppType::Transmission);
+        spec.app_config = Some(AppConfig::Transmission(TransmissionConfig {
+            settings: serde_json::json!({"speed-limit-down": 100}),
+            ..Default::default()
+        }));
+        let mut errors = Vec::new();
+        validate_transmission_settings(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn transmission_settings_with_managed_key() {
+        let mut spec = minimal_spec(AppType::Transmission);
+        spec.app_config = Some(AppConfig::Transmission(TransmissionConfig {
+            settings: serde_json::json!({"rpc-password": "hunter2"}),
+            ..Default::default()
+        }));
+        let mut errors = Vec::new();
+        validate_transmission_settings(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("rpc-password"));
+    }
+
+    // ── validate_backup_retention ──
+
+    #[test]
+    fn backup_retention_no_backup() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_backup_retention(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn backup_retention_enabled_positive() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.backup = Some(BackupSpec {
+            enabled: true,
+            retention_count: 5,
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_backup_retention(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn backup_retention_enabled_zero() {
+        let mut spec = minimal_spec(AppType::Sonarr);
+        spec.backup = Some(BackupSpec {
+            enabled: true,
+            retention_count: 0,
+            ..Default::default()
+        });
+        let mut errors = Vec::new();
+        validate_backup_retention(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("retentionCount"));
+    }
+
+    // ── validate_indexer_definition_names ──
+
+    #[test]
+    fn indexer_names_no_prowlarr() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_indexer_definition_names(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn indexer_names_valid() {
+        let mut spec = minimal_spec(AppType::Prowlarr);
+        spec.app_config = Some(AppConfig::Prowlarr(ProwlarrConfig {
+            custom_definitions: vec![IndexerDefinition {
+                name: "my-indexer".into(),
+                content: "yaml: here".into(),
+            }],
+        }));
+        let mut errors = Vec::new();
+        validate_indexer_definition_names(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn indexer_names_empty() {
+        let mut spec = minimal_spec(AppType::Prowlarr);
+        spec.app_config = Some(AppConfig::Prowlarr(ProwlarrConfig {
+            custom_definitions: vec![IndexerDefinition {
+                name: "".into(),
+                content: "yaml: here".into(),
+            }],
+        }));
+        let mut errors = Vec::new();
+        validate_indexer_definition_names(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("non-empty"));
+    }
+
+    #[test]
+    fn indexer_names_special_chars() {
+        let mut spec = minimal_spec(AppType::Prowlarr);
+        spec.app_config = Some(AppConfig::Prowlarr(ProwlarrConfig {
+            custom_definitions: vec![IndexerDefinition {
+                name: "my indexer!".into(),
+                content: "yaml: here".into(),
+            }],
+        }));
+        let mut errors = Vec::new();
+        validate_indexer_definition_names(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("alphanumeric"));
+    }
+
+    // ── validate_ssh_shell_override ──
+
+    #[test]
+    fn ssh_shell_override_non_ssh_app() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_ssh_shell_override(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn ssh_shell_override_interactive_mode() {
+        let mut spec = minimal_spec(AppType::SshBastion);
+        spec.app_config = Some(AppConfig::SshBastion(SshBastionConfig {
+            mode: SshMode::Shell,
+            users: vec![SshUser {
+                name: "alice".into(),
+                uid: 1000,
+                gid: 1000,
+                shell: Some("/bin/zsh".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let mut errors = Vec::new();
+        validate_ssh_shell_override(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn ssh_shell_override_restricted_rsync() {
+        let mut spec = minimal_spec(AppType::SshBastion);
+        spec.app_config = Some(AppConfig::SshBastion(SshBastionConfig {
+            mode: SshMode::RestrictedRsync,
+            users: vec![SshUser {
+                name: "bob".into(),
+                uid: 1001,
+                gid: 1001,
+                shell: Some("/bin/bash".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let mut errors = Vec::new();
+        validate_ssh_shell_override(&spec, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("restricted-rsync"));
+    }
+
+    // ── validate_identity_immutable ──
+
+    fn wrap_spec_as_object(spec: &ServarrAppSpec) -> serde_json::Value {
+        serde_json::json!({
+            "spec": serde_json::to_value(spec).unwrap()
+        })
+    }
+
+    #[test]
+    fn identity_immutable_no_old_object() {
+        let spec = minimal_spec(AppType::Sonarr);
+        let mut errors = Vec::new();
+        validate_identity_immutable(&spec, None, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn identity_immutable_same_type_and_instance() {
+        let old_spec = minimal_spec(AppType::Sonarr);
+        let new_spec = minimal_spec(AppType::Sonarr);
+        let old_obj = wrap_spec_as_object(&old_spec);
+        let mut errors = Vec::new();
+        validate_identity_immutable(&new_spec, Some(&old_obj), &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn identity_immutable_different_app_type() {
+        let old_spec = minimal_spec(AppType::Sonarr);
+        let mut new_spec = minimal_spec(AppType::Radarr);
+        new_spec.instance = None;
+        let old_obj = wrap_spec_as_object(&old_spec);
+        let mut errors = Vec::new();
+        validate_identity_immutable(&new_spec, Some(&old_obj), &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("immutable"));
+        assert!(errors[0].contains("app"));
+    }
+
+    #[test]
+    fn identity_immutable_different_instance() {
+        let mut old_spec = minimal_spec(AppType::Sonarr);
+        old_spec.instance = Some("default".into());
+        let mut new_spec = minimal_spec(AppType::Sonarr);
+        new_spec.instance = Some("4k".into());
+        let old_obj = wrap_spec_as_object(&old_spec);
+        let mut errors = Vec::new();
+        validate_identity_immutable(&new_spec, Some(&old_obj), &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("immutable"));
+        assert!(errors[0].contains("instance"));
+    }
+}

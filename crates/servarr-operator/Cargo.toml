@@ -33,3 +33,11 @@ chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
 cron = "0.15"
 url = "2.5.8"
 
+[dev-dependencies]
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+http = "1"
+temp-env = "0.3"
+tower = "0.5"
+tower-test = "0.4"
+

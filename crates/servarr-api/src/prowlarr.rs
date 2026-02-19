@@ -178,3 +178,172 @@ impl ProwlarrClient {
             .map_err(map_sdk_err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prowlarr_client_new_constructs() {
+        let client = ProwlarrClient::new("http://localhost:9696", "test-key");
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn sdk_to_app_maps_all_fields() {
+        let mut resource = prowlarr::models::ApplicationResource::new();
+        resource.id = Some(42);
+        resource.name = Some(Some("My App".to_string()));
+        resource.sync_level = Some(prowlarr::models::ApplicationSyncLevel::FullSync);
+        resource.implementation = Some(Some("Sonarr".to_string()));
+        resource.config_contract = Some(Some("SonarrSettings".to_string()));
+        resource.tags = Some(Some(vec![1, 2, 3]));
+
+        // Build a field
+        let mut field = prowlarr::models::Field::new();
+        field.name = Some(Some("baseUrl".to_string()));
+        field.value = Some(Some(serde_json::json!("http://sonarr:8989")));
+        resource.fields = Some(Some(vec![field]));
+
+        let app = sdk_to_app(resource);
+
+        assert_eq!(app.id, 42);
+        assert_eq!(app.name, "My App");
+        assert_eq!(app.sync_level, "fullSync");
+        assert_eq!(app.implementation, "Sonarr");
+        assert_eq!(app.config_contract, "SonarrSettings");
+        assert_eq!(app.tags, vec![1, 2, 3]);
+        assert_eq!(app.fields.len(), 1);
+        assert_eq!(app.fields[0].name, "baseUrl");
+        assert_eq!(app.fields[0].value, serde_json::json!("http://sonarr:8989"));
+    }
+
+    #[test]
+    fn sdk_to_app_handles_none_fields() {
+        let resource = prowlarr::models::ApplicationResource::new();
+        let app = sdk_to_app(resource);
+
+        assert_eq!(app.id, 0);
+        assert_eq!(app.name, "");
+        assert_eq!(app.sync_level, "");
+        assert_eq!(app.implementation, "");
+        assert_eq!(app.config_contract, "");
+        assert!(app.fields.is_empty());
+        assert!(app.tags.is_empty());
+    }
+
+    #[test]
+    fn sdk_to_app_filters_empty_field_names() {
+        let mut resource = prowlarr::models::ApplicationResource::new();
+        let mut empty_field = prowlarr::models::Field::new();
+        empty_field.name = Some(Some(String::new()));
+        empty_field.value = Some(Some(serde_json::json!("ignored")));
+
+        let mut valid_field = prowlarr::models::Field::new();
+        valid_field.name = Some(Some("apiKey".to_string()));
+        valid_field.value = Some(Some(serde_json::json!("secret")));
+
+        resource.fields = Some(Some(vec![empty_field, valid_field]));
+        let app = sdk_to_app(resource);
+
+        assert_eq!(app.fields.len(), 1);
+        assert_eq!(app.fields[0].name, "apiKey");
+    }
+
+    #[test]
+    fn app_to_sdk_maps_all_fields() {
+        let app = ProwlarrApp {
+            id: 10,
+            name: "Test App".to_string(),
+            sync_level: "fullSync".to_string(),
+            implementation: "Radarr".to_string(),
+            config_contract: "RadarrSettings".to_string(),
+            fields: vec![ProwlarrAppField {
+                name: "baseUrl".to_string(),
+                value: serde_json::json!("http://radarr:7878"),
+            }],
+            tags: vec![5, 10],
+        };
+
+        let resource = app_to_sdk(&app);
+
+        assert_eq!(resource.id, Some(10));
+        assert_eq!(resource.name, Some(Some("Test App".to_string())));
+        assert_eq!(
+            resource.sync_level,
+            Some(prowlarr::models::ApplicationSyncLevel::FullSync)
+        );
+        assert_eq!(resource.implementation, Some(Some("Radarr".to_string())));
+        assert_eq!(
+            resource.config_contract,
+            Some(Some("RadarrSettings".to_string()))
+        );
+        assert_eq!(resource.tags, Some(Some(vec![5, 10])));
+
+        let fields = resource.fields.unwrap().unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, Some(Some("baseUrl".to_string())));
+        assert_eq!(
+            fields[0].value,
+            Some(Some(serde_json::json!("http://radarr:7878")))
+        );
+    }
+
+    #[test]
+    fn app_to_sdk_zero_id_becomes_none() {
+        let app = ProwlarrApp {
+            id: 0,
+            name: "New App".to_string(),
+            sync_level: "addOnly".to_string(),
+            implementation: String::new(),
+            config_contract: String::new(),
+            fields: vec![],
+            tags: vec![],
+        };
+
+        let resource = app_to_sdk(&app);
+        assert_eq!(resource.id, None);
+        assert_eq!(
+            resource.sync_level,
+            Some(prowlarr::models::ApplicationSyncLevel::AddOnly)
+        );
+    }
+
+    #[test]
+    fn app_to_sdk_disabled_sync_level() {
+        let app = ProwlarrApp {
+            id: 1,
+            name: "App".to_string(),
+            sync_level: "disabled".to_string(),
+            implementation: String::new(),
+            config_contract: String::new(),
+            fields: vec![],
+            tags: vec![],
+        };
+
+        let resource = app_to_sdk(&app);
+        assert_eq!(
+            resource.sync_level,
+            Some(prowlarr::models::ApplicationSyncLevel::Disabled)
+        );
+    }
+
+    #[test]
+    fn app_to_sdk_unknown_sync_level_defaults_to_full_sync() {
+        let app = ProwlarrApp {
+            id: 1,
+            name: "App".to_string(),
+            sync_level: "unknown_value".to_string(),
+            implementation: String::new(),
+            config_contract: String::new(),
+            fields: vec![],
+            tags: vec![],
+        };
+
+        let resource = app_to_sdk(&app);
+        assert_eq!(
+            resource.sync_level,
+            Some(prowlarr::models::ApplicationSyncLevel::FullSync)
+        );
+    }
+}

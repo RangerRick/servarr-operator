@@ -238,3 +238,43 @@ impl std::io::Write for Base64Writer<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::base64_encode;
+
+    #[test]
+    fn base64_empty() {
+        assert_eq!(base64_encode(""), "");
+    }
+
+    #[test]
+    fn base64_one_byte() {
+        // "a" -> "YQ=="
+        assert_eq!(base64_encode("a"), "YQ==");
+    }
+
+    #[test]
+    fn base64_two_bytes() {
+        // "ab" -> "YWI="
+        assert_eq!(base64_encode("ab"), "YWI=");
+    }
+
+    #[test]
+    fn base64_three_bytes() {
+        // "abc" -> "YWJj"
+        assert_eq!(base64_encode("abc"), "YWJj");
+    }
+
+    #[test]
+    fn base64_hello_world() {
+        // "hello world" -> "aGVsbG8gd29ybGQ="
+        assert_eq!(base64_encode("hello world"), "aGVsbG8gd29ybGQ=");
+    }
+
+    #[test]
+    fn base64_credentials() {
+        // "user:pass" -> "dXNlcjpwYXNz"
+        assert_eq!(base64_encode("user:pass"), "dXNlcjpwYXNz");
+    }
+}

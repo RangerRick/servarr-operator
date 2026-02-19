@@ -102,3 +102,43 @@ impl OverseerrClient {
             .map(|_| ())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overseerr_client_new_constructs() {
+        let client = OverseerrClient::new("http://localhost:5055", "test-key");
+        assert_eq!(client.config.base_path, "http://localhost:5055");
+        assert!(client.config.api_key.is_some());
+        let api_key = client.config.api_key.as_ref().unwrap();
+        assert_eq!(api_key.key, "test-key");
+        assert!(api_key.prefix.is_none());
+    }
+
+    #[test]
+    fn overseerr_client_new_trims_trailing_slash() {
+        let client = OverseerrClient::new("http://localhost:5055/", "key");
+        assert_eq!(client.config.base_path, "http://localhost:5055");
+    }
+
+    #[test]
+    fn map_err_formats_debug() {
+        // The overseerr SDK Error type wraps a reqwest error or a response body.
+        // We can test map_err by constructing an ApiError from a simple Debug value.
+        let sdk_err: overseerr::apis::Error<()> =
+            overseerr::apis::Error::Io(std::io::Error::other("test io error"));
+        let api_err = map_err(sdk_err);
+        match api_err {
+            ApiError::ApiResponse { status, body } => {
+                assert_eq!(status, 0);
+                assert!(
+                    body.contains("test io error"),
+                    "body should contain the error message, got: {body}"
+                );
+            }
+            other => panic!("expected ApiResponse, got: {other}"),
+        }
+    }
+}

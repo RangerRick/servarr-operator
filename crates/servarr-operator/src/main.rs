@@ -1,13 +1,6 @@
-mod context;
-mod controller;
-mod media_stack_controller;
-mod metrics;
-mod server;
-mod telemetry;
-mod webhook;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use servarr_operator::{controller, media_stack_controller, server, telemetry, webhook};
 use tracing::{error, info};
 
 const METRICS_PORT: u16 = 8080;

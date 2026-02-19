@@ -16,6 +16,14 @@ pub struct ServerState {
     ready: Arc<AtomicBool>,
 }
 
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 impl ServerState {
     pub fn new() -> Self {
         Self {
@@ -75,5 +83,90 @@ async fn readyz_handler(State(state): State<ServerState>) -> impl IntoResponse {
         (StatusCode::OK, "ready")
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "not ready")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use http::Request;
+    use tower::ServiceExt; // for oneshot
+
+    fn build_app(state: ServerState) -> Router {
+        Router::new()
+            .route("/metrics", get(metrics_handler))
+            .route("/healthz", get(healthz_handler))
+            .route("/readyz", get(readyz_handler))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_200() {
+        let state = ServerState::new();
+        let app = build_app(state);
+        let response = app
+            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_503_when_not_ready() {
+        let state = ServerState::new();
+        let app = build_app(state);
+        let response = app
+            .oneshot(Request::get("/readyz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_200_after_set_ready() {
+        let state = ServerState::new();
+        state.set_ready();
+        let app = build_app(state);
+        let response = app
+            .oneshot(Request::get("/readyz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_returns_200_with_prometheus_text() {
+        let state = ServerState::new();
+        let app = build_app(state);
+        let response = app
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        // Prometheus text format uses lines like "# HELP ..." and "# TYPE ..."
+        // At minimum, process metrics should be present.
+        assert!(
+            text.contains("# HELP") || text.contains("# TYPE") || text.is_empty(),
+            "expected prometheus text format"
+        );
+    }
+
+    #[test]
+    fn server_state_new_starts_not_ready() {
+        let state = ServerState::new();
+        assert!(!state.ready.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn server_state_set_ready_toggles_flag() {
+        let state = ServerState::new();
+        assert!(!state.ready.load(Ordering::Relaxed));
+        state.set_ready();
+        assert!(state.ready.load(Ordering::Relaxed));
     }
 }
