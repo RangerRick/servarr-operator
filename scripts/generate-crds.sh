@@ -10,24 +10,26 @@ CRD_CHART_DIR="$REPO_ROOT/charts/servarr-crds/templates"
 
 mkdir -p "$CRD_CHART_DIR"
 
-# Generate all CRDs into a temp file
+export TMPDIR_SPLIT
+TMPDIR_SPLIT=$(mktemp -d)
 TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
+trap 'rm -rf "$TMPFILE" "$TMPDIR_SPLIT"' EXIT
 
+# Generate all CRDs
 cargo run -p servarr-operator -- crd 2>/dev/null > "$TMPFILE"
 
 # The output contains two CRDs concatenated without --- separators.
 # Split on each "apiVersion:" line that starts a new document.
 awk '
 /^apiVersion:/ { n++ }
-n == 1 { print > "/tmp/servarr-crd-1.yaml" }
-n == 2 { print > "/tmp/servarr-crd-2.yaml" }
+n == 1 { print > (ENVIRON["TMPDIR_SPLIT"] "/crd-1.yaml") }
+n == 2 { print > (ENVIRON["TMPDIR_SPLIT"] "/crd-2.yaml") }
 ' "$TMPFILE"
 
 SERVARRAPP_CRD="$CRD_CHART_DIR/servarrapp-crd.yaml"
 MEDIASTACK_CRD="$CRD_CHART_DIR/mediastack-crd.yaml"
 
-for f in /tmp/servarr-crd-1.yaml /tmp/servarr-crd-2.yaml; do
+for f in "$TMPDIR_SPLIT"/crd-*.yaml; do
     [ -s "$f" ] || continue
     name=$(grep -m1 '^  name:' "$f" | awk '{print $2}')
     case "$name" in
@@ -43,7 +45,6 @@ for f in /tmp/servarr-crd-1.yaml /tmp/servarr-crd-2.yaml; do
             echo "Warning: unknown CRD '$name'" >&2
             ;;
     esac
-    rm -f "$f"
 done
 
 echo "CRD generation complete."
