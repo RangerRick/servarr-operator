@@ -713,16 +713,16 @@ fn build_security_contexts(
             let run_as_non_root = profile.run_as_non_root.unwrap_or(true);
             let read_only_root = profile.read_only_root_filesystem.unwrap_or(false);
             let allow_priv_esc = profile.allow_privilege_escalation.unwrap_or(false);
-            let run_as_user = if profile.user != 0 {
-                Some(profile.user)
-            } else {
-                None
-            };
-            let run_as_group = if profile.group != 0 {
-                Some(profile.group)
-            } else {
-                None
-            };
+            // Always set runAsUser/runAsGroup explicitly for Custom profiles.
+            // The default uid (65534/nobody) is safe; if a user explicitly sets 0
+            // they get root, which is an intentional (if inadvisable) choice.
+            let run_as_user = Some(profile.user);
+            let run_as_group = Some(profile.group);
+            if profile.user == 0 {
+                tracing::warn!(
+                    "Custom security profile has user=0 (root); container will run as root"
+                );
+            }
             let caps_drop = if profile.capabilities_drop.is_empty() {
                 Some(vec!["ALL".into()])
             } else {
