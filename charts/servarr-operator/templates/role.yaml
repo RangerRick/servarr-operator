@@ -32,7 +32,9 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "create", "patch"]
-  # Secrets: get for API keys + create/patch for SSH bastion authorized-keys
+  # Secrets: get for API keys + create/patch for SSH bastion authorized-keys.
+  # NOTE: Kubernetes RBAC cannot scope to specific Secret names, so this grants
+  # read access to ALL Secrets in the watched namespace.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "create", "patch"]
