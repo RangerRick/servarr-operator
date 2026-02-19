@@ -227,9 +227,19 @@ fn build_egress_rules(config: &NetworkPolicyConfig) -> Vec<NetworkPolicyEgressRu
     }
 
     // Custom egress rules (raw JSON)
-    for raw_rule in &config.custom_egress_rules {
-        if let Ok(rule) = serde_json::from_value(raw_rule.clone()) {
-            rules.push(rule);
+    for (i, raw_rule) in config.custom_egress_rules.iter().enumerate() {
+        match serde_json::from_value(raw_rule.clone()) {
+            Ok(rule) => {
+                tracing::debug!(index = i, "applied custom egress rule");
+                rules.push(rule);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    index = i,
+                    error = %e,
+                    "custom_egress_rules entry failed to parse as NetworkPolicyEgressRule; rule dropped"
+                );
+            }
         }
     }
 
