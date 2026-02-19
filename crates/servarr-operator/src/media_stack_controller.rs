@@ -71,7 +71,7 @@ pub async fn run(server_state: crate::server::ServerState) -> Result<()> {
     Ok(())
 }
 
-async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Action, Error> {
+pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Action, Error> {
     let client = &ctx.client;
     let name = stack.name_any();
     let ns = stack.namespace().unwrap_or_else(|| "default".into());
@@ -382,7 +382,7 @@ async fn patch_status(
     Ok(())
 }
 
-fn error_policy(_stack: Arc<MediaStack>, error: &Error, _ctx: Arc<Context>) -> Action {
+pub fn error_policy(_stack: Arc<MediaStack>, error: &Error, _ctx: Arc<Context>) -> Action {
     increment_stack_reconcile_total("error");
     warn!(%error, "media-stack reconciliation failed, requeuing");
     Action::requeue(Duration::from_secs(60))

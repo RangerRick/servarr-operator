@@ -501,3 +501,201 @@ impl HealthCheck for ServarrClient {
         Ok(!status.version.is_empty())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oo_str_none() {
+        assert_eq!(oo_str(&None), "");
+    }
+
+    #[test]
+    fn oo_str_some_none() {
+        assert_eq!(oo_str(&Some(None)), "");
+    }
+
+    #[test]
+    fn oo_str_some_some_value() {
+        let v = Some(Some("hello".to_string()));
+        assert_eq!(oo_str(&v), "hello");
+    }
+
+    #[test]
+    fn oo_str_some_some_empty() {
+        let v = Some(Some(String::new()));
+        assert_eq!(oo_str(&v), "");
+    }
+
+    #[test]
+    fn map_sdk_err_formats_debug() {
+        let err = map_sdk_err("something went wrong");
+        match err {
+            ApiError::ApiResponse { status, body } => {
+                assert_eq!(status, 0);
+                assert_eq!(body, "\"something went wrong\"");
+            }
+            other => panic!("expected ApiResponse, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn new_sonarr_client() {
+        let client = ServarrClient::new("http://localhost:8989", "test-key", AppKind::Sonarr);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn new_radarr_client() {
+        let client = ServarrClient::new("http://localhost:7878", "test-key", AppKind::Radarr);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn new_lidarr_client() {
+        let client = ServarrClient::new("http://localhost:8686", "test-key", AppKind::Lidarr);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn new_prowlarr_client() {
+        let client = ServarrClient::new("http://localhost:9696", "test-key", AppKind::Prowlarr);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn new_with_invalid_url_returns_error() {
+        let result = ServarrClient::new("not a url", "key", AppKind::Sonarr);
+        assert!(result.is_err());
+    }
+
+    // -- Conversion helper unit tests -----------------------------------------
+
+    fn make_oo(s: &str) -> Option<Option<String>> {
+        Some(Some(s.to_string()))
+    }
+
+    #[test]
+    fn system_status_from_radarr_converts_fields() {
+        let mut r = radarr::models::SystemResource::default();
+        r.app_name = make_oo("Radarr");
+        r.version = make_oo("5.0.0");
+        r.is_production = Some(true);
+        r.os_name = make_oo("Linux");
+
+        let s = system_status_from_radarr(r);
+        assert_eq!(s.app_name, "Radarr");
+        assert_eq!(s.version, "5.0.0");
+        assert!(s.is_production);
+        assert_eq!(s.os_name, "Linux");
+    }
+
+    #[test]
+    fn system_status_from_lidarr_converts_fields() {
+        let mut r = lidarr::models::SystemResource::default();
+        r.app_name = make_oo("Lidarr");
+        r.version = make_oo("2.0.0");
+        r.is_debug = Some(true);
+
+        let s = system_status_from_lidarr(r);
+        assert_eq!(s.app_name, "Lidarr");
+        assert_eq!(s.version, "2.0.0");
+        assert!(s.is_debug);
+    }
+
+    #[test]
+    fn system_status_from_prowlarr_converts_fields() {
+        let mut r = prowlarr::models::SystemResource::default();
+        r.app_name = make_oo("Prowlarr");
+        r.version = make_oo("1.5.0");
+        r.runtime_name = make_oo(".NET");
+
+        let s = system_status_from_prowlarr(r);
+        assert_eq!(s.app_name, "Prowlarr");
+        assert_eq!(s.version, "1.5.0");
+        assert_eq!(s.runtime_name, ".NET");
+    }
+
+    #[test]
+    fn system_status_from_sonarr_converts_fields() {
+        let mut r = sonarr::models::SystemResource::default();
+        r.app_name = make_oo("Sonarr");
+        r.version = make_oo("4.0.0");
+        r.startup_path = make_oo("/opt/sonarr");
+
+        let s = system_status_from_sonarr(r);
+        assert_eq!(s.app_name, "Sonarr");
+        assert_eq!(s.version, "4.0.0");
+        assert_eq!(s.startup_path, "/opt/sonarr");
+    }
+
+    #[test]
+    fn system_status_defaults_for_missing_fields() {
+        let r = radarr::models::SystemResource::default();
+        let s = system_status_from_radarr(r);
+        assert_eq!(s.app_name, "");
+        assert_eq!(s.version, "");
+        assert!(!s.is_debug);
+        assert!(!s.is_production);
+        assert_eq!(s.os_name, "");
+    }
+
+    #[test]
+    fn health_from_sonarr_converts_items() {
+        let h = sonarr::models::HealthResource {
+            source: make_oo("IndexerCheck"),
+            r#type: Some(sonarr::models::HealthCheckResult::Ok),
+            message: make_oo("All good"),
+            wiki_url: Some("https://wiki.example.com".to_string()),
+            ..Default::default()
+        };
+        let result = health_from_sonarr(vec![h]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source, "IndexerCheck");
+        assert_eq!(result[0].message, "All good");
+    }
+
+    #[test]
+    fn health_from_radarr_via_macro() {
+        let h = radarr::models::HealthResource {
+            source: make_oo("DiskCheck"),
+            r#type: Some(radarr::models::HealthCheckResult::Warning),
+            message: make_oo("Low space"),
+            wiki_url: make_oo("https://wiki.example.com"),
+            ..Default::default()
+        };
+        let result: Vec<HealthCheckResult> = health_from_oo!(radarr, vec![h]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source, "DiskCheck");
+        assert_eq!(result[0].message, "Low space");
+    }
+
+    #[test]
+    fn health_from_lidarr_via_macro() {
+        let h = lidarr::models::HealthResource {
+            source: make_oo("UpdateCheck"),
+            r#type: Some(lidarr::models::HealthCheckResult::Ok),
+            message: make_oo("Up to date"),
+            wiki_url: make_oo(""),
+            ..Default::default()
+        };
+        let result: Vec<HealthCheckResult> = health_from_oo!(lidarr, vec![h]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source, "UpdateCheck");
+    }
+
+    #[test]
+    fn health_from_prowlarr_via_macro() {
+        let h = prowlarr::models::HealthResource {
+            source: make_oo("IndexerSync"),
+            r#type: Some(prowlarr::models::HealthCheckResult::Ok),
+            message: make_oo("Synced"),
+            wiki_url: make_oo(""),
+            ..Default::default()
+        };
+        let result: Vec<HealthCheckResult> = health_from_oo!(prowlarr, vec![h]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].source, "IndexerSync");
+    }
+}

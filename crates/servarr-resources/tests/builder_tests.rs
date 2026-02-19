@@ -814,10 +814,7 @@ fn test_certificate_tls_enabled_valid_issuer_returns_certificate() {
             app: AppType::Sonarr,
             gateway: Some(GatewaySpec {
                 enabled: true,
-                hosts: vec![
-                    "sonarr.example.com".into(),
-                    "sonarr.local".into(),
-                ],
+                hosts: vec!["sonarr.example.com".into(), "sonarr.local".into()],
                 tls: Some(TlsSpec {
                     enabled: true,
                     cert_issuer: "letsencrypt-prod".into(),
@@ -836,10 +833,7 @@ fn test_certificate_tls_enabled_valid_issuer_returns_certificate() {
     assert_eq!(cert.metadata.name.as_deref(), Some("test-app"));
     assert_eq!(cert.metadata.namespace.as_deref(), Some("media"));
     assert_eq!(cert.data["spec"]["secretName"], "test-app-tls");
-    assert_eq!(
-        cert.data["spec"]["issuerRef"]["name"],
-        "letsencrypt-prod"
-    );
+    assert_eq!(cert.data["spec"]["issuerRef"]["name"], "letsencrypt-prod");
     assert_eq!(cert.data["spec"]["issuerRef"]["kind"], "ClusterIssuer");
 
     let dns_names = cert.data["spec"]["dnsNames"].as_array().unwrap();
@@ -1089,7 +1083,10 @@ fn test_configmap_sabnzbd_with_host_whitelist() {
     };
 
     let cm = servarr_resources::configmap::build(&app);
-    assert!(cm.is_some(), "SABnzbd with host_whitelist should produce a ConfigMap");
+    assert!(
+        cm.is_some(),
+        "SABnzbd with host_whitelist should produce a ConfigMap"
+    );
     let cm = cm.unwrap();
     let data = cm.data.unwrap();
     assert!(data.contains_key("apply-whitelist.sh"));
@@ -1118,7 +1115,10 @@ fn test_configmap_sabnzbd_empty_host_whitelist_returns_none() {
     };
 
     let cm = servarr_resources::configmap::build(&app);
-    assert!(cm.is_none(), "SABnzbd with empty host_whitelist should return None");
+    assert!(
+        cm.is_none(),
+        "SABnzbd with empty host_whitelist should return None"
+    );
 }
 
 #[test]
@@ -1153,7 +1153,10 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
     };
 
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
-    assert!(cm.is_some(), "SSH bastion in RestrictedRsync mode should produce a ConfigMap");
+    assert!(
+        cm.is_some(),
+        "SSH bastion in RestrictedRsync mode should produce a ConfigMap"
+    );
     let cm = cm.unwrap();
     let data = cm.data.unwrap();
     assert!(data.contains_key("restricted-rsync.sh"));
@@ -1167,7 +1170,10 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
 fn test_configmap_ssh_bastion_restricted_rsync_non_ssh_returns_none() {
     let app = make_app(AppType::Sonarr);
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
-    assert!(cm.is_none(), "Non-SSH app should return None for restricted-rsync ConfigMap");
+    assert!(
+        cm.is_none(),
+        "Non-SSH app should return None for restricted-rsync ConfigMap"
+    );
 }
 
 #[test]
@@ -1192,7 +1198,10 @@ fn test_configmap_ssh_bastion_interactive_mode_returns_none() {
     };
 
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
-    assert!(cm.is_none(), "SSH bastion in Shell mode should return None for restricted-rsync");
+    assert!(
+        cm.is_none(),
+        "SSH bastion in Shell mode should return None for restricted-rsync"
+    );
 }
 
 #[test]
@@ -1224,7 +1233,10 @@ fn test_configmap_prowlarr_definitions() {
     };
 
     let cm = servarr_resources::configmap::build_prowlarr_definitions(&app);
-    assert!(cm.is_some(), "Prowlarr with custom_definitions should produce a ConfigMap");
+    assert!(
+        cm.is_some(),
+        "Prowlarr with custom_definitions should produce a ConfigMap"
+    );
     let cm = cm.unwrap();
     let data = cm.data.unwrap();
     assert!(data.contains_key("my-tracker.yml"));
@@ -1252,7 +1264,10 @@ fn test_configmap_prowlarr_empty_definitions_returns_none() {
     };
 
     let cm = servarr_resources::configmap::build_prowlarr_definitions(&app);
-    assert!(cm.is_none(), "Prowlarr with empty custom_definitions should return None");
+    assert!(
+        cm.is_none(),
+        "Prowlarr with empty custom_definitions should return None"
+    );
 }
 
 #[test]
@@ -1276,7 +1291,10 @@ fn test_configmap_tar_unpack_enabled() {
     };
 
     let cm = servarr_resources::configmap::build_tar_unpack(&app);
-    assert!(cm.is_some(), "SABnzbd with tar_unpack=true should produce a ConfigMap");
+    assert!(
+        cm.is_some(),
+        "SABnzbd with tar_unpack=true should produce a ConfigMap"
+    );
     let cm = cm.unwrap();
     let data = cm.data.unwrap();
     assert!(data.contains_key("install-tar-tools.sh"));
@@ -1306,7 +1324,10 @@ fn test_configmap_tar_unpack_disabled_returns_none() {
     };
 
     let cm = servarr_resources::configmap::build_tar_unpack(&app);
-    assert!(cm.is_none(), "SABnzbd with tar_unpack=false should return None");
+    assert!(
+        cm.is_none(),
+        "SABnzbd with tar_unpack=false should return None"
+    );
 }
 
 #[test]
@@ -1612,12 +1633,18 @@ fn test_deployment_custom_probes() {
     let container = &deploy.spec.unwrap().template.spec.unwrap().containers[0];
 
     let liveness = container.liveness_probe.as_ref().unwrap();
-    assert!(liveness.tcp_socket.is_some(), "Liveness should be TCP probe");
+    assert!(
+        liveness.tcp_socket.is_some(),
+        "Liveness should be TCP probe"
+    );
     assert_eq!(liveness.initial_delay_seconds, Some(60));
     assert_eq!(liveness.period_seconds, Some(20));
 
     let readiness = container.readiness_probe.as_ref().unwrap();
-    assert!(readiness.tcp_socket.is_some(), "Readiness should be TCP probe");
+    assert!(
+        readiness.tcp_socket.is_some(),
+        "Readiness should be TCP probe"
+    );
     assert_eq!(readiness.initial_delay_seconds, Some(15));
 }
 
@@ -1649,7 +1676,10 @@ fn test_deployment_gpu_resources() {
     let limits = resources.limits.as_ref().unwrap();
     assert_eq!(limits["nvidia.com/gpu"].0, "1");
     assert_eq!(limits["gpu.intel.com/i915"].0, "1");
-    assert!(!limits.contains_key("amd.com/gpu"), "AMD GPU should not be present when None");
+    assert!(
+        !limits.contains_key("amd.com/gpu"),
+        "AMD GPU should not be present when None"
+    );
 
     let requests = resources.requests.as_ref().unwrap();
     assert_eq!(requests["nvidia.com/gpu"].0, "1");
@@ -1703,7 +1733,10 @@ fn test_networkpolicy_gateway_namespace_ingress() {
             })
         })
     });
-    assert!(gw_rule.is_some(), "Should have ingress rule for gateway namespace");
+    assert!(
+        gw_rule.is_some(),
+        "Should have ingress rule for gateway namespace"
+    );
 }
 
 #[test]
@@ -1734,14 +1767,15 @@ fn test_networkpolicy_ssh_bastion_ingress() {
     // Should have a rule allowing from 0.0.0.0/0
     let ssh_rule = ingress.iter().find(|r| {
         r.from.as_ref().is_some_and(|peers| {
-            peers.iter().any(|p| {
-                p.ip_block
-                    .as_ref()
-                    .is_some_and(|ip| ip.cidr == "0.0.0.0/0")
-            })
+            peers
+                .iter()
+                .any(|p| p.ip_block.as_ref().is_some_and(|ip| ip.cidr == "0.0.0.0/0"))
         })
     });
-    assert!(ssh_rule.is_some(), "SSH bastion should allow ingress from 0.0.0.0/0");
+    assert!(
+        ssh_rule.is_some(),
+        "SSH bastion should allow ingress from 0.0.0.0/0"
+    );
 }
 
 #[test]
@@ -1776,12 +1810,8 @@ fn test_networkpolicy_transmission_peer_port() {
     let peer_rule = ingress.iter().find(|r| {
         r.ports.as_ref().is_some_and(|ports| {
             ports.len() == 2
-                && ports
-                    .iter()
-                    .any(|p| p.protocol.as_deref() == Some("TCP"))
-                && ports
-                    .iter()
-                    .any(|p| p.protocol.as_deref() == Some("UDP"))
+                && ports.iter().any(|p| p.protocol.as_deref() == Some("TCP"))
+                && ports.iter().any(|p| p.protocol.as_deref() == Some("UDP"))
         })
     });
     assert!(
@@ -1926,14 +1956,20 @@ fn test_networkpolicy_custom_egress_rules() {
     let egress = spec.egress.unwrap();
 
     // Should have the custom egress rule (same-ns + DNS + custom = 3 rules)
-    assert_eq!(egress.len(), 3, "Should have same-ns, DNS, and custom egress rules");
+    assert_eq!(
+        egress.len(),
+        3,
+        "Should have same-ns, DNS, and custom egress rules"
+    );
 
     let custom = &egress[2];
     let to = custom.to.as_ref().unwrap();
-    assert!(to[0]
-        .ip_block
-        .as_ref()
-        .is_some_and(|ip| ip.cidr == "10.0.0.0/8"));
+    assert!(
+        to[0]
+            .ip_block
+            .as_ref()
+            .is_some_and(|ip| ip.cidr == "10.0.0.0/8")
+    );
 }
 
 #[test]
@@ -1981,10 +2017,7 @@ fn test_networkpolicy_ssh_bastion_nfs_egress() {
     let nfs_rule = egress.iter().find(|r| {
         r.ports.as_ref().is_some_and(|ports| {
             ports.iter().any(|p| {
-                p.port
-                    == Some(
-                        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(2049),
-                    )
+                p.port == Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(2049))
             })
         })
     });
@@ -2032,10 +2065,7 @@ fn test_networkpolicy_allow_dns_false() {
     let has_dns = egress.iter().any(|r| {
         r.ports.as_ref().is_some_and(|ports| {
             ports.iter().any(|p| {
-                p.port
-                    == Some(
-                        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(53),
-                    )
+                p.port == Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(53))
             })
         })
     });
@@ -2043,6 +2073,281 @@ fn test_networkpolicy_allow_dns_false() {
         !has_dns,
         "Should not have DNS egress rule when allow_dns=false"
     );
+}
+
+// ============================================================
+// common.rs coverage tests
+// ============================================================
+
+#[test]
+fn test_common_app_name_returns_metadata_name() {
+    let app = make_app(AppType::Sonarr);
+    let name = servarr_resources::common::app_name(&app);
+    assert_eq!(name, "test-app");
+}
+
+#[test]
+fn test_common_app_name_returns_unknown_when_no_name() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: None,
+            namespace: Some("media".into()),
+            uid: Some("uid-noname".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Sonarr,
+            ..Default::default()
+        },
+        status: None,
+    };
+    let name = servarr_resources::common::app_name(&app);
+    assert_eq!(name, "unknown");
+}
+
+#[test]
+fn test_common_app_namespace_returns_metadata_namespace() {
+    let app = make_app(AppType::Sonarr);
+    let ns = servarr_resources::common::app_namespace(&app);
+    assert_eq!(ns, "media");
+}
+
+#[test]
+fn test_common_app_namespace_returns_default_when_no_ns() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("test-app".into()),
+            namespace: None,
+            uid: Some("uid-nons".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Sonarr,
+            ..Default::default()
+        },
+        status: None,
+    };
+    let ns = servarr_resources::common::app_namespace(&app);
+    assert_eq!(ns, "default");
+}
+
+#[test]
+fn test_common_labels_basic() {
+    let app = make_app(AppType::Radarr);
+    let labels = servarr_resources::common::labels(&app);
+
+    assert_eq!(labels["app.kubernetes.io/name"], "radarr");
+    assert_eq!(labels["app.kubernetes.io/instance"], "test-app");
+    assert_eq!(labels["app.kubernetes.io/managed-by"], "servarr-operator");
+    assert_eq!(labels["servarr.dev/app"], "radarr");
+    // No instance label when spec.instance is None
+    assert!(!labels.contains_key("servarr.dev/instance"));
+}
+
+#[test]
+fn test_common_labels_with_instance() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("sonarr-4k".into()),
+            namespace: Some("media".into()),
+            uid: Some("uid-inst".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Sonarr,
+            instance: Some("4k".into()),
+            ..Default::default()
+        },
+        status: None,
+    };
+    let labels = servarr_resources::common::labels(&app);
+    assert_eq!(labels["servarr.dev/instance"], "4k");
+}
+
+#[test]
+fn test_common_selector_labels() {
+    let app = make_app(AppType::Lidarr);
+    let sel = servarr_resources::common::selector_labels(&app);
+
+    assert_eq!(sel.len(), 2);
+    assert_eq!(sel["app.kubernetes.io/name"], "lidarr");
+    assert_eq!(sel["app.kubernetes.io/instance"], "test-app");
+}
+
+#[test]
+fn test_common_child_name_empty_suffix() {
+    let app = make_app(AppType::Sonarr);
+    let name = servarr_resources::common::child_name(&app, "");
+    assert_eq!(name, "test-app");
+}
+
+#[test]
+fn test_common_child_name_with_suffix() {
+    let app = make_app(AppType::Sonarr);
+    let name = servarr_resources::common::child_name(&app, "config");
+    assert_eq!(name, "test-app-config");
+}
+
+#[test]
+fn test_common_name_for_alias() {
+    let app = make_app(AppType::Sonarr);
+    let name = servarr_resources::common::name_for(&app, "downloads");
+    assert_eq!(name, "test-app-downloads");
+}
+
+#[test]
+fn test_common_namespace_alias() {
+    let app = make_app(AppType::Sonarr);
+    let ns = servarr_resources::common::namespace(&app);
+    assert_eq!(ns, "media");
+}
+
+#[test]
+fn test_common_metadata_sets_all_fields() {
+    let app = make_app(AppType::Sonarr);
+    let meta = servarr_resources::common::metadata(&app, "config");
+
+    assert_eq!(meta.name.as_deref(), Some("test-app-config"));
+    assert_eq!(meta.namespace.as_deref(), Some("media"));
+    assert!(meta.labels.is_some());
+    assert!(meta.owner_references.is_some());
+
+    let owner_refs = meta.owner_references.unwrap();
+    assert_eq!(owner_refs.len(), 1);
+    assert_eq!(owner_refs[0].uid, "test-uid-123");
+}
+
+#[test]
+fn test_common_metadata_no_suffix() {
+    let app = make_app(AppType::Sonarr);
+    let meta = servarr_resources::common::metadata(&app, "");
+    assert_eq!(meta.name.as_deref(), Some("test-app"));
+}
+
+#[test]
+fn test_common_owner_reference() {
+    let app = make_app(AppType::Sonarr);
+    let owner_ref = servarr_resources::common::owner_reference(&app);
+    assert_eq!(owner_ref.uid, "test-uid-123");
+    assert!(owner_ref.controller.unwrap_or(false));
+}
+
+#[test]
+fn test_common_owner_ref_alias() {
+    let app = make_app(AppType::Sonarr);
+    let owner_ref = servarr_resources::common::owner_ref(&app);
+    assert_eq!(owner_ref.uid, "test-uid-123");
+}
+
+// ============================================================
+// service.rs coverage tests
+// ============================================================
+
+#[test]
+fn test_service_builder_radarr_default_port() {
+    let app = make_app(AppType::Radarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let spec = svc.spec.unwrap();
+    let ports = spec.ports.unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].port, 7878);
+    assert_eq!(ports[0].name.as_deref(), Some("http"));
+    assert_eq!(ports[0].protocol.as_deref(), Some("TCP"));
+}
+
+#[test]
+fn test_service_builder_sonarr_default_port() {
+    let app = make_app(AppType::Sonarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let spec = svc.spec.unwrap();
+    let ports = spec.ports.unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].port, 8989);
+}
+
+#[test]
+fn test_service_builder_prowlarr_default_port() {
+    let app = make_app(AppType::Prowlarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let spec = svc.spec.unwrap();
+    let ports = spec.ports.unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].port, 9696);
+}
+
+#[test]
+fn test_service_builder_transmission_with_peer_port() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("transmission".into()),
+            namespace: Some("media".into()),
+            uid: Some("uid-svc-tx".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Transmission,
+            app_config: Some(AppConfig::Transmission(TransmissionConfig {
+                peer_port: Some(PeerPortConfig {
+                    port: 51413,
+                    host_port: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let svc = servarr_resources::service::build(&app);
+    let spec = svc.spec.unwrap();
+    let ports = spec.ports.unwrap();
+
+    // Should have the main port + peer-tcp + peer-udp = 3 ports
+    assert_eq!(ports.len(), 3);
+    assert!(
+        ports
+            .iter()
+            .any(|p| p.name.as_deref() == Some("peer-tcp") && p.port == 51413)
+    );
+    assert!(
+        ports
+            .iter()
+            .any(|p| p.name.as_deref() == Some("peer-udp") && p.port == 51413)
+    );
+}
+
+#[test]
+fn test_service_builder_selector_labels() {
+    let app = make_app(AppType::Sonarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let spec = svc.spec.unwrap();
+    let selector = spec.selector.unwrap();
+    assert_eq!(selector["app.kubernetes.io/name"], "sonarr");
+    assert_eq!(selector["app.kubernetes.io/instance"], "test-app");
+}
+
+#[test]
+fn test_service_builder_clusterip_type() {
+    let app = make_app(AppType::Sonarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let spec = svc.spec.unwrap();
+    assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
+}
+
+#[test]
+fn test_service_builder_owner_references() {
+    let app = make_app(AppType::Sonarr);
+    let svc = servarr_resources::service::build(&app);
+
+    let owner_refs = svc.metadata.owner_references.unwrap();
+    assert_eq!(owner_refs.len(), 1);
+    assert_eq!(owner_refs[0].uid, "test-uid-123");
 }
 
 #[test]
@@ -2078,4 +2383,113 @@ fn test_networkpolicy_allow_same_namespace_false() {
         ingress.is_empty(),
         "With allow_same_namespace=false and no other ingress sources, ingress rules should be empty"
     );
+}
+
+// ---------------------------------------------------------------------------
+// SSH Bastion advanced env vars (tcp_forwarding, gateway_ports, disable_sftp, motd)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_deployment_ssh_bastion_advanced_env_vars() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion-advanced".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-adv".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![SshUser {
+                    name: "admin".into(),
+                    uid: 1000,
+                    gid: 1000,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                tcp_forwarding: true,
+                gateway_ports: true,
+                disable_sftp: true,
+                motd: "Welcome to bastion".into(),
+                sftp_chroot: "/chroot".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let env = container.env.as_ref().unwrap();
+
+    let find_env = |name: &str| -> Option<String> {
+        env.iter()
+            .find(|e| e.name == name)
+            .and_then(|e| e.value.clone())
+    };
+
+    assert_eq!(find_env("TCP_FORWARDING"), Some("true".into()));
+    assert_eq!(find_env("GATEWAY_PORTS"), Some("true".into()));
+    assert_eq!(find_env("SFTP_MODE"), Some("false".into()));
+    assert_eq!(find_env("MOTD"), Some("Welcome to bastion".into()));
+    assert_eq!(find_env("SFTP_CHROOT"), Some("/chroot".into()));
+}
+
+#[test]
+fn test_deployment_ssh_bastion_managed_env_ignored() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion-env".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-env".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![SshUser {
+                    name: "user1".into(),
+                    uid: 1000,
+                    gid: 1000,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                ..Default::default()
+            })),
+            env: vec![
+                servarr_crds::EnvVar {
+                    name: "SSH_USERS".into(),
+                    value: "SHOULD_BE_IGNORED".into(),
+                },
+                servarr_crds::EnvVar {
+                    name: "CUSTOM_VAR".into(),
+                    value: "allowed".into(),
+                },
+            ],
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let env = container.env.as_ref().unwrap();
+
+    // SSH_USERS should be set by the operator, not the user override
+    let ssh_users = env.iter().find(|e| e.name == "SSH_USERS").unwrap();
+    assert_ne!(
+        ssh_users.value.as_deref(),
+        Some("SHOULD_BE_IGNORED"),
+        "SSH_USERS should not accept user override"
+    );
+
+    // CUSTOM_VAR should be allowed
+    let custom = env.iter().find(|e| e.name == "CUSTOM_VAR").unwrap();
+    assert_eq!(custom.value.as_deref(), Some("allowed"));
 }

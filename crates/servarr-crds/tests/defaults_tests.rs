@@ -27,12 +27,15 @@ fn ssh_bastion_has_required_capabilities() {
     let defaults = AppDefaults::for_app(&AppType::SshBastion);
     let caps = &defaults.security.capabilities_add;
 
-    let required = ["CHOWN", "SETGID", "SETUID", "NET_BIND_SERVICE", "SYS_CHROOT"];
+    let required = [
+        "CHOWN",
+        "SETGID",
+        "SETUID",
+        "NET_BIND_SERVICE",
+        "SYS_CHROOT",
+    ];
     for cap in &required {
-        assert!(
-            caps.iter().any(|c| c == cap),
-            "missing capability: {cap}"
-        );
+        assert!(caps.iter().any(|c| c == cap), "missing capability: {cap}");
     }
     assert_eq!(caps.len(), required.len(), "unexpected extra capabilities");
 }
@@ -207,4 +210,34 @@ fn probe_config_default_is_http_with_standard_values() {
     assert_eq!(probe.period_seconds, 10);
     assert_eq!(probe.timeout_seconds, 1);
     assert_eq!(probe.failure_threshold, 3);
+}
+
+// ---------------------------------------------------------------------------
+// SecurityProfile::custom
+// ---------------------------------------------------------------------------
+
+#[test]
+fn security_profile_custom_has_custom_type() {
+    let profile = SecurityProfile::custom();
+    assert!(matches!(profile.profile_type, SecurityProfileType::Custom));
+}
+
+// ---------------------------------------------------------------------------
+// ProwlarrSyncSpec::default and OverseerrSyncSpec::default
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prowlarr_sync_spec_default_values() {
+    let spec = ProwlarrSyncSpec::default();
+    assert!(!spec.enabled);
+    assert!(spec.namespace_scope.is_none());
+    assert!(spec.auto_remove);
+}
+
+#[test]
+fn overseerr_sync_spec_default_values() {
+    let spec = OverseerrSyncSpec::default();
+    assert!(!spec.enabled);
+    assert!(spec.namespace_scope.is_none());
+    assert!(spec.auto_remove);
 }

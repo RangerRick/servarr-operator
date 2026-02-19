@@ -220,16 +220,12 @@ mod tests {
     #[test]
     fn set_managed_stacks_sets_gauge() {
         set_managed_stacks("test_stack_ns", 2);
-        let val = MANAGED_STACKS
-            .with_label_values(&["test_stack_ns"])
-            .get();
+        let val = MANAGED_STACKS.with_label_values(&["test_stack_ns"]).get();
         assert_eq!(val, 2);
 
         // Setting again overwrites
         set_managed_stacks("test_stack_ns", 5);
-        let val = MANAGED_STACKS
-            .with_label_values(&["test_stack_ns"])
-            .get();
+        let val = MANAGED_STACKS.with_label_values(&["test_stack_ns"]).get();
         assert_eq!(val, 5);
     }
 

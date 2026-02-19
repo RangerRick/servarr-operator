@@ -90,7 +90,7 @@ pub async fn run(server_state: crate::server::ServerState) -> Result<()> {
     Ok(())
 }
 
-async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Error> {
+pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Error> {
     let client = &ctx.client;
     let name = app.name_any();
     let ns = app.namespace().unwrap_or_else(|| "default".into());
@@ -474,7 +474,7 @@ async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Er
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-async fn check_api_health(
+pub(crate) async fn check_api_health(
     client: &Client,
     app: &ServarrApp,
     ns: &str,
@@ -610,7 +610,7 @@ async fn check_update_available(
     })
 }
 
-async fn update_status(
+pub(crate) async fn update_status(
     client: &Client,
     app: &ServarrApp,
     ns: &str,
@@ -736,7 +736,7 @@ async fn update_status(
     Ok(())
 }
 
-fn error_policy(app: Arc<ServarrApp>, error: &Error, ctx: Arc<Context>) -> Action {
+pub fn error_policy(app: Arc<ServarrApp>, error: &Error, ctx: Arc<Context>) -> Action {
     let app_type = app.spec.app.as_str();
     increment_reconcile_total(app_type, "error");
     warn!(%error, "reconciliation failed, requeuing");
@@ -1111,17 +1111,18 @@ async fn maybe_restore_backup(
 }
 
 /// A discovered *arr app in the namespace with its service URL and API key.
-struct DiscoveredApp {
-    name: String,
-    app_type: AppType,
-    base_url: String,
-    api_key: String,
-    instance: Option<String>,
+#[derive(Debug)]
+pub(crate) struct DiscoveredApp {
+    pub(crate) name: String,
+    pub(crate) app_type: AppType,
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+    pub(crate) instance: Option<String>,
 }
 
 /// Discover all Servarr v3 apps (Sonarr/Radarr/Lidarr) in a namespace
 /// and resolve their service URLs and API keys.
-async fn discover_namespace_apps(
+pub(crate) async fn discover_namespace_apps(
     client: &Client,
     namespace: &str,
 ) -> Result<Vec<DiscoveredApp>, anyhow::Error> {
@@ -1971,8 +1972,7 @@ mod tests {
 
     #[test]
     fn json_diff_paths_array_element_difference() {
-        let result =
-            json_diff_paths(&json!({"a": [1, 2]}), &json!({"a": [1, 3]}), String::new());
+        let result = json_diff_paths(&json!({"a": [1, 2]}), &json!({"a": [1, 3]}), String::new());
         assert_eq!(result, vec!["a[1]: 2 vs 3"]);
     }
 
@@ -1999,17 +1999,26 @@ mod tests {
 
     #[test]
     fn app_type_to_kind_sonarr() {
-        assert!(matches!(app_type_to_kind(&AppType::Sonarr), AppKind::Sonarr));
+        assert!(matches!(
+            app_type_to_kind(&AppType::Sonarr),
+            AppKind::Sonarr
+        ));
     }
 
     #[test]
     fn app_type_to_kind_radarr() {
-        assert!(matches!(app_type_to_kind(&AppType::Radarr), AppKind::Radarr));
+        assert!(matches!(
+            app_type_to_kind(&AppType::Radarr),
+            AppKind::Radarr
+        ));
     }
 
     #[test]
     fn app_type_to_kind_lidarr() {
-        assert!(matches!(app_type_to_kind(&AppType::Lidarr), AppKind::Lidarr));
+        assert!(matches!(
+            app_type_to_kind(&AppType::Lidarr),
+            AppKind::Lidarr
+        ));
     }
 
     #[test]
@@ -2040,5 +2049,565 @@ mod tests {
     #[test]
     fn print_crd_returns_ok() {
         assert!(print_crd().is_ok());
+    }
+
+    // ---- prowlarr_sync_exists ----
+
+    #[tokio::test]
+    async fn prowlarr_sync_exists_returns_true_when_prowlarr_with_sync() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // Return a Prowlarr app with prowlarr_sync enabled
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrAppList",
+                "metadata": {},
+                "items": [{
+                    "apiVersion": "servarr.dev/v1alpha1",
+                    "kind": "ServarrApp",
+                    "metadata": {
+                        "name": "prowlarr",
+                        "namespace": "test",
+                        "uid": "prowl-uid",
+                        "resourceVersion": "1"
+                    },
+                    "spec": {
+                        "app": "Prowlarr",
+                        "prowlarrSync": {
+                            "enabled": true
+                        }
+                    }
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = prowlarr_sync_exists(&client, "test").await;
+        assert!(
+            result,
+            "should return true when Prowlarr with sync.enabled exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn prowlarr_sync_exists_returns_false_when_no_prowlarr() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // Return only a Sonarr app (no Prowlarr)
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrAppList",
+                "metadata": {},
+                "items": [{
+                    "apiVersion": "servarr.dev/v1alpha1",
+                    "kind": "ServarrApp",
+                    "metadata": {
+                        "name": "sonarr",
+                        "namespace": "test",
+                        "uid": "sonarr-uid",
+                        "resourceVersion": "1"
+                    },
+                    "spec": { "app": "Sonarr" }
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = prowlarr_sync_exists(&client, "test").await;
+        assert!(!result, "should return false when no Prowlarr exists");
+    }
+
+    #[tokio::test]
+    async fn prowlarr_sync_exists_returns_false_when_sync_disabled() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // Prowlarr exists but sync is disabled
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrAppList",
+                "metadata": {},
+                "items": [{
+                    "apiVersion": "servarr.dev/v1alpha1",
+                    "kind": "ServarrApp",
+                    "metadata": {
+                        "name": "prowlarr",
+                        "namespace": "test",
+                        "uid": "prowl-uid",
+                        "resourceVersion": "1"
+                    },
+                    "spec": {
+                        "app": "Prowlarr",
+                        "prowlarrSync": {
+                            "enabled": false
+                        }
+                    }
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = prowlarr_sync_exists(&client, "test").await;
+        assert!(
+            !result,
+            "should return false when Prowlarr sync is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn prowlarr_sync_exists_returns_false_on_api_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // API returns 500
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Status",
+                "metadata": {},
+                "status": "Failure",
+                "message": "internal error",
+                "reason": "InternalError",
+                "code": 500
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = prowlarr_sync_exists(&client, "test").await;
+        assert!(!result, "should return false on API error");
+    }
+
+    // ---- Error display format ----
+
+    #[test]
+    fn error_display_kube_variant() {
+        // Use FromUtf8 variant as a simple kube::Error to construct
+        let invalid_bytes = vec![0xff, 0xfe];
+        let utf8_err = String::from_utf8(invalid_bytes).unwrap_err();
+        let kube_err = kube::Error::FromUtf8(utf8_err);
+        let err = Error::Kube(kube_err);
+        let display = format!("{err}");
+        assert!(
+            display.contains("Kubernetes API error"),
+            "Kube error display should contain 'Kubernetes API error', got: {display}"
+        );
+    }
+
+    #[test]
+    fn error_display_serialization_variant() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let err = Error::Serialization(json_err);
+        let display = format!("{err}");
+        assert!(
+            display.contains("Serialization error"),
+            "Serialization error display should contain 'Serialization error', got: {display}"
+        );
+    }
+
+    #[test]
+    fn error_debug_format_includes_variant_name() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let err = Error::Serialization(json_err);
+        let debug = format!("{err:?}");
+        assert!(
+            debug.contains("Serialization"),
+            "Debug format should include variant name, got: {debug}"
+        );
+    }
+
+    // ---- Helper: build kube::Client from mock server ----
+
+    async fn build_mock_client(server_uri: &str) -> Client {
+        use kube::config::{
+            AuthInfo, Cluster, Context as KubeContext, KubeConfigOptions, Kubeconfig,
+            NamedAuthInfo, NamedCluster, NamedContext,
+        };
+
+        let kubeconfig = Kubeconfig {
+            clusters: vec![NamedCluster {
+                name: "test".into(),
+                cluster: Some(Cluster {
+                    server: Some(server_uri.to_string()),
+                    insecure_skip_tls_verify: Some(true),
+                    ..Default::default()
+                }),
+            }],
+            contexts: vec![NamedContext {
+                name: "test".into(),
+                context: Some(KubeContext {
+                    cluster: "test".into(),
+                    user: Some("test".into()),
+                    namespace: Some("test".into()),
+                    ..Default::default()
+                }),
+            }],
+            auth_infos: vec![NamedAuthInfo {
+                name: "test".into(),
+                auth_info: Some(AuthInfo::default()),
+            }],
+            current_context: Some("test".into()),
+            ..Default::default()
+        };
+
+        let config =
+            kube::Config::from_custom_kubeconfig(kubeconfig, &KubeConfigOptions::default())
+                .await
+                .unwrap();
+        Client::try_from(config).unwrap()
+    }
+
+    // ---- Helper: build a minimal ServarrApp for testing ----
+
+    fn make_test_app(name: &str, ns: &str, app_type: AppType) -> ServarrApp {
+        use servarr_crds::ServarrAppSpec;
+        let spec = ServarrAppSpec {
+            app: app_type,
+            ..Default::default()
+        };
+        let mut app = ServarrApp::new(name, spec);
+        app.metadata.namespace = Some(ns.into());
+        app.metadata.uid = Some("test-uid-12345".into());
+        app.metadata.resource_version = Some("1".into());
+        app.metadata.generation = Some(1);
+        app
+    }
+
+    // ---- update_status tests ----
+
+    #[tokio::test]
+    async fn update_status_ready_deployment() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        let app = make_test_app("my-sonarr", "test", AppType::Sonarr);
+
+        // GET deployment returns readyReplicas=1
+        Mock::given(method("GET"))
+            .and(path("/apis/apps/v1/namespaces/test/deployments/my-sonarr"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "my-sonarr",
+                    "namespace": "test",
+                    "uid": "deploy-uid-1",
+                    "resourceVersion": "100"
+                },
+                "spec": {
+                    "selector": { "matchLabels": { "app": "my-sonarr" } },
+                    "template": {
+                        "metadata": { "labels": { "app": "my-sonarr" } },
+                        "spec": { "containers": [{ "name": "sonarr", "image": "sonarr:latest" }] }
+                    }
+                },
+                "status": {
+                    "readyReplicas": 1,
+                    "replicas": 1,
+                    "availableReplicas": 1
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Capture the PATCH status call to verify conditions
+        Mock::given(method("PATCH"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps/my-sonarr/status",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrApp",
+                "metadata": {
+                    "name": "my-sonarr",
+                    "namespace": "test",
+                    "uid": "sa-uid-1",
+                    "resourceVersion": "200"
+                },
+                "spec": { "app": "Sonarr" }
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None).await;
+        assert!(
+            result.is_ok(),
+            "update_status should succeed, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_status_not_ready_deployment() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        let app = make_test_app("my-sonarr", "test", AppType::Sonarr);
+
+        // GET deployment returns readyReplicas=0
+        Mock::given(method("GET"))
+            .and(path("/apis/apps/v1/namespaces/test/deployments/my-sonarr"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "my-sonarr",
+                    "namespace": "test",
+                    "uid": "deploy-uid-1",
+                    "resourceVersion": "100"
+                },
+                "spec": {
+                    "selector": { "matchLabels": { "app": "my-sonarr" } },
+                    "template": {
+                        "metadata": { "labels": { "app": "my-sonarr" } },
+                        "spec": { "containers": [{ "name": "sonarr", "image": "sonarr:latest" }] }
+                    }
+                },
+                "status": {
+                    "readyReplicas": 0,
+                    "replicas": 1,
+                    "availableReplicas": 0
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Capture and inspect the PATCH status call
+        let status_mock = Mock::given(method("PATCH"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps/my-sonarr/status",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrApp",
+                "metadata": {
+                    "name": "my-sonarr",
+                    "namespace": "test",
+                    "uid": "sa-uid-1",
+                    "resourceVersion": "200"
+                },
+                "spec": { "app": "Sonarr" }
+            })))
+            .expect(1)
+            .mount_as_scoped(&mock_server)
+            .await;
+
+        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None).await;
+        assert!(
+            result.is_ok(),
+            "update_status should succeed, got: {result:?}"
+        );
+
+        // Verify the PATCH was called (expect(1) will assert on drop)
+        drop(status_mock);
+    }
+
+    // ---- discover_namespace_apps tests ----
+
+    #[tokio::test]
+    async fn discover_apps_finds_sonarr_radarr() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // List ServarrApps returns Sonarr + Radarr with api_key_secret
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrAppList",
+                "metadata": {},
+                "items": [
+                    {
+                        "apiVersion": "servarr.dev/v1alpha1",
+                        "kind": "ServarrApp",
+                        "metadata": {
+                            "name": "my-sonarr",
+                            "namespace": "test",
+                            "uid": "sonarr-uid",
+                            "resourceVersion": "1"
+                        },
+                        "spec": {
+                            "app": "Sonarr",
+                            "apiKeySecret": "sonarr-secret"
+                        }
+                    },
+                    {
+                        "apiVersion": "servarr.dev/v1alpha1",
+                        "kind": "ServarrApp",
+                        "metadata": {
+                            "name": "my-radarr",
+                            "namespace": "test",
+                            "uid": "radarr-uid",
+                            "resourceVersion": "1"
+                        },
+                        "spec": {
+                            "app": "Radarr",
+                            "apiKeySecret": "radarr-secret"
+                        }
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // GET secret for sonarr
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaces/test/secrets/sonarr-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": { "name": "sonarr-secret", "namespace": "test" },
+                "data": { "api-key": "c29uYXJyLWtleQ==" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // GET secret for radarr
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaces/test/secrets/radarr-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": { "name": "radarr-secret", "namespace": "test" },
+                "data": { "api-key": "cmFkYXJyLWtleQ==" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = discover_namespace_apps(&client, "test").await;
+        assert!(
+            result.is_ok(),
+            "discover_namespace_apps should succeed, got: {result:?}"
+        );
+        let apps = result.unwrap();
+        assert_eq!(apps.len(), 2, "should discover 2 apps");
+
+        let sonarr = apps.iter().find(|a| a.name == "my-sonarr").unwrap();
+        assert!(matches!(sonarr.app_type, AppType::Sonarr));
+        assert_eq!(sonarr.api_key, "sonarr-key");
+
+        let radarr = apps.iter().find(|a| a.name == "my-radarr").unwrap();
+        assert!(matches!(radarr.app_type, AppType::Radarr));
+        assert_eq!(radarr.api_key, "radarr-key");
+    }
+
+    #[tokio::test]
+    async fn discover_apps_skips_transmission() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let client = build_mock_client(&mock_server.uri()).await;
+
+        // List ServarrApps returns Sonarr + Transmission
+        Mock::given(method("GET"))
+            .and(path(
+                "/apis/servarr.dev/v1alpha1/namespaces/test/servarrapps",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "servarr.dev/v1alpha1",
+                "kind": "ServarrAppList",
+                "metadata": {},
+                "items": [
+                    {
+                        "apiVersion": "servarr.dev/v1alpha1",
+                        "kind": "ServarrApp",
+                        "metadata": {
+                            "name": "my-sonarr",
+                            "namespace": "test",
+                            "uid": "sonarr-uid",
+                            "resourceVersion": "1"
+                        },
+                        "spec": {
+                            "app": "Sonarr",
+                            "apiKeySecret": "sonarr-secret"
+                        }
+                    },
+                    {
+                        "apiVersion": "servarr.dev/v1alpha1",
+                        "kind": "ServarrApp",
+                        "metadata": {
+                            "name": "my-transmission",
+                            "namespace": "test",
+                            "uid": "tx-uid",
+                            "resourceVersion": "1"
+                        },
+                        "spec": {
+                            "app": "Transmission",
+                            "apiKeySecret": "tx-secret"
+                        }
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // GET secret for sonarr
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaces/test/secrets/sonarr-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": { "name": "sonarr-secret", "namespace": "test" },
+                "data": { "api-key": "c29uYXJyLWtleQ==" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = discover_namespace_apps(&client, "test").await;
+        assert!(
+            result.is_ok(),
+            "discover_namespace_apps should succeed, got: {result:?}"
+        );
+        let apps = result.unwrap();
+        assert_eq!(
+            apps.len(),
+            1,
+            "should discover only 1 app (Transmission excluded)"
+        );
+        assert_eq!(apps[0].name, "my-sonarr");
+        assert!(
+            !apps.iter().any(|a| a.name == "my-transmission"),
+            "Transmission should not be in discovered results"
+        );
     }
 }
