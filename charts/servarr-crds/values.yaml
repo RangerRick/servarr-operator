@@ -1,0 +1,8 @@
+# Namespace where the operator is installed (used for webhook service reference).
+operatorNamespace: servarr
+
+webhook:
+  enabled: true
+  # cert-manager issuer configuration for webhook TLS.
+  certIssuer: selfsigned-issuer
+  certIssuerKind: ClusterIssuer
