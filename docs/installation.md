@@ -102,22 +102,20 @@ helm install servarr-crds \
      --version 0.1.0
    ```
 
-### Namespace-Scoped Mode
+### Cluster-Scoped Mode
 
-By default the operator watches all namespaces and requires `ClusterRole`
-privileges. To restrict it to a single namespace (using `Role`/`RoleBinding`
-instead), set `watchNamespace`:
+By default the operator watches only its own namespace and uses `Role`/`RoleBinding`
+privileges. To watch all namespaces (requires `ClusterRole`/`ClusterRoleBinding`):
 
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
   --namespace servarr \
-  --set watchNamespace=servarr
+  --set watchAllNamespaces=true
 ```
 
-This is useful in shared clusters where the operator deployer only has
-namespace-admin privileges. The CRDs chart still requires a one-time
-cluster-admin install.
+The CRDs chart still requires a one-time cluster-admin install regardless of
+which mode the operator runs in.
 
 ## Helm Values Reference
 
@@ -148,11 +146,11 @@ helm install servarr-operator \
 | `resources.requests.cpu` | `50m` | CPU request |
 | `resources.requests.memory` | `64Mi` | Memory request |
 
-### watchNamespace
+### watchAllNamespaces
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `watchNamespace` | `""` | Restrict operator to a single namespace (uses Role/RoleBinding instead of ClusterRole/ClusterRoleBinding) |
+| `watchAllNamespaces` | `false` | Watch all namespaces (uses ClusterRole/ClusterRoleBinding). Default is namespace-scoped (Role/RoleBinding). |
 
 ### webhook
 

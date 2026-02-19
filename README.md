@@ -124,13 +124,13 @@ helm install servarr-operator \
   --namespace servarr
 ```
 
-For namespace-scoped mode (no cluster-admin required for the operator):
+To watch all namespaces (requires cluster-admin for the operator):
 
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
   --namespace servarr \
-  --set watchNamespace=servarr
+  --set watchAllNamespaces=true
 ```
 
 ### Deploy an app

@@ -14,9 +14,9 @@ resources:
 webhook:
   enabled: true
 
-# Set to a namespace name to run in namespace-scoped mode (Role/RoleBinding).
-# Leave empty for cluster-scoped mode (ClusterRole/ClusterRoleBinding).
-watchNamespace: ""
+# By default the operator watches only its own namespace (Role/RoleBinding).
+# Set to true to watch all namespaces (ClusterRole/ClusterRoleBinding).
+watchAllNamespaces: false
 
 nodeSelector: {}
 tolerations: []

@@ -1,9 +1,9 @@
-{{- if .Values.watchNamespace }}
+{{- if not .Values.watchAllNamespaces }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: servarr-operator
-  namespace: {{ .Values.watchNamespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: servarr-operator
     app.kubernetes.io/instance: {{ .Release.Name }}

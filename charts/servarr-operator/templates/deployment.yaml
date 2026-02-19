@@ -46,9 +46,14 @@ spec:
             - name: WEBHOOK_ENABLED
               value: "true"
             {{- end }}
-            {{- if .Values.watchNamespace }}
+            {{- if .Values.watchAllNamespaces }}
+            - name: WATCH_ALL_NAMESPACES
+              value: "true"
+            {{- else }}
             - name: WATCH_NAMESPACE
-              value: {{ .Values.watchNamespace | quote }}
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             {{- end }}
             {{- range $app, $img := .Values.defaultImages }}
             - name: DEFAULT_IMAGE_{{ upper $app }}_REPO
