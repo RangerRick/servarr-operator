@@ -54,7 +54,7 @@ This guide covers installing the Servarr Operator Helm chart into a Kubernetes c
 1. Create a namespace for the operator:
 
    ```bash
-   kubectl create namespace servarr-system
+   kubectl create namespace servarr
    ```
 
 2. Install the Helm chart:
@@ -62,7 +62,7 @@ This guide covers installing the Servarr Operator Helm chart into a Kubernetes c
    ```bash
    helm install servarr-operator \
      oci://ghcr.io/rangerrick/servarr/servarr-operator \
-     --namespace servarr-system
+     --namespace servarr
    ```
 
    To pin a specific chart version:
@@ -70,7 +70,7 @@ This guide covers installing the Servarr Operator Helm chart into a Kubernetes c
    ```bash
    helm install servarr-operator \
      oci://ghcr.io/rangerrick/servarr/servarr-operator \
-     --namespace servarr-system \
+     --namespace servarr \
      --version 0.1.0
    ```
 
@@ -90,7 +90,7 @@ full file.
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system \
+  --namespace servarr \
   --set image.tag=0.1.0
 ```
 
@@ -116,7 +116,7 @@ To disable webhooks (removes the cert-manager dependency):
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system \
+  --namespace servarr \
   --set webhook.enabled=false
 ```
 
@@ -130,7 +130,7 @@ helm install servarr-operator \
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system \
+  --namespace servarr \
   --set nodeSelector.kubernetes\\.io/arch=amd64
 ```
 
@@ -160,7 +160,7 @@ To override a default image:
 ```bash
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system \
+  --namespace servarr \
   --set defaultImages.sonarr.tag=4.0.17
 ```
 
@@ -169,7 +169,7 @@ helm install servarr-operator \
 1. Check that the operator pod is running:
 
    ```bash
-   kubectl get pods -n servarr-system
+   kubectl get pods -n servarr
    ```
 
    Expected output:
@@ -182,13 +182,13 @@ helm install servarr-operator \
 2. Check the operator logs:
 
    ```bash
-   kubectl logs -n servarr-system deployment/servarr-operator
+   kubectl logs -n servarr deployment/servarr-operator
    ```
 
 3. If webhooks are enabled, verify the certificate was issued:
 
    ```bash
-   kubectl get certificate -n servarr-system
+   kubectl get certificate -n servarr
    ```
 
 ## Upgrading
@@ -198,13 +198,13 @@ helm install servarr-operator \
    ```bash
    helm upgrade servarr-operator \
      oci://ghcr.io/rangerrick/servarr/servarr-operator \
-     --namespace servarr-system
+     --namespace servarr
    ```
 
 2. Verify the rollout completed:
 
    ```bash
-   kubectl rollout status deployment/servarr-operator -n servarr-system
+   kubectl rollout status deployment/servarr-operator -n servarr
    ```
 
 ## Uninstalling
@@ -212,13 +212,13 @@ helm install servarr-operator \
 1. Remove the Helm release:
 
    ```bash
-   helm uninstall servarr-operator --namespace servarr-system
+   helm uninstall servarr-operator --namespace servarr
    ```
 
 2. Optionally delete the namespace:
 
    ```bash
-   kubectl delete namespace servarr-system
+   kubectl delete namespace servarr
    ```
 
    Note: CRDs are not removed by `helm uninstall`. To remove them manually:

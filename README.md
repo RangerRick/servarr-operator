@@ -112,11 +112,11 @@ spec:
 ### Install
 
 ```bash
-kubectl create namespace servarr-system
+kubectl create namespace servarr
 
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system
+  --namespace servarr
 ```
 
 ### Deploy an app
