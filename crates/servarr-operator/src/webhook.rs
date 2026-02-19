@@ -11,7 +11,7 @@ use kube::Client;
 use kube::api::{Api, ListParams};
 use serde::{Deserialize, Serialize};
 use servarr_crds::{AppConfig, AppType, ServarrApp, ServarrAppSpec};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const DEFAULT_WEBHOOK_PORT: u16 = 9443;
 
@@ -56,6 +56,8 @@ struct AdmissionRequest {
     #[serde(default)]
     namespace: String,
     object: serde_json::Value,
+    #[serde(default)]
+    old_object: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -117,6 +119,7 @@ async fn validate_handler(
     let uid = request.uid.clone();
     let validation_result = validate_spec(
         &request.object,
+        request.old_object.as_ref(),
         &request.operation,
         &request.namespace,
         &_state.client,
@@ -152,6 +155,7 @@ async fn validate_handler(
 /// Validate a ServarrApp spec. Returns `Ok(())` on success or `Err(message)`.
 async fn validate_spec(
     object: &serde_json::Value,
+    old_object: Option<&serde_json::Value>,
     operation: &str,
     namespace: &str,
     client: &Client,
@@ -162,6 +166,14 @@ async fn validate_spec(
 
     let parsed: ServarrAppSpec =
         serde_json::from_value(spec.clone()).map_err(|e| format!("invalid spec: {e}"))?;
+
+    debug!(
+        operation,
+        namespace,
+        app = %parsed.app,
+        instance = ?parsed.instance,
+        "validating ServarrApp admission"
+    );
 
     let mut errors = Vec::new();
 
@@ -185,6 +197,11 @@ async fn validate_spec(
         validate_no_duplicate_instance(&parsed, namespace, client, &mut errors).await;
     }
 
+    // Rule 6b: app and instance are immutable on UPDATE
+    if operation == "UPDATE" {
+        validate_identity_immutable(&parsed, old_object, &mut errors);
+    }
+
     // Rule 7: Transmission settings must not override operator-managed keys
     validate_transmission_settings(&parsed, &mut errors);
 
@@ -198,6 +215,41 @@ async fn validate_spec(
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+fn validate_identity_immutable(
+    spec: &ServarrAppSpec,
+    old_object: Option<&serde_json::Value>,
+    errors: &mut Vec<String>,
+) {
+    let old_spec = old_object
+        .and_then(|o| o.get("spec"))
+        .and_then(|s| serde_json::from_value::<ServarrAppSpec>(s.clone()).ok());
+
+    if let Some(old) = old_spec {
+        if old.app != spec.app {
+            debug!(
+                old_app = %old.app,
+                new_app = %spec.app,
+                "rejecting app type change on UPDATE"
+            );
+            errors.push(format!(
+                "spec.app is immutable (was '{}', got '{}')",
+                old.app, spec.app
+            ));
+        }
+        if old.instance != spec.instance {
+            debug!(
+                old_instance = ?old.instance,
+                new_instance = ?spec.instance,
+                "rejecting instance change on UPDATE"
+            );
+            errors.push(format!(
+                "spec.instance is immutable (was {:?}, got {:?})",
+                old.instance, spec.instance
+            ));
+        }
     }
 }
 
