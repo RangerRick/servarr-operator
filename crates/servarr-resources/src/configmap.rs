@@ -284,11 +284,14 @@ if [ ! -f "$INI_FILE" ]; then
   exit 0
 fi
 
-# Update existing host_whitelist or add it under [misc]
+# Update existing host_whitelist or add it under [misc].
+# Use awk instead of sed to avoid metacharacter injection from whitelist values.
 if grep -q "^host_whitelist" "$INI_FILE"; then
-  sed -i "s|^host_whitelist.*|host_whitelist = $WHITELIST_VALUE|" "$INI_FILE"
+  awk -v val="$WHITELIST_VALUE" '/^host_whitelist/{print "host_whitelist = " val; next}1' \
+    "$INI_FILE" > "${INI_FILE}.tmp" && mv -f "${INI_FILE}.tmp" "$INI_FILE"
 else
-  sed -i '/^\[misc\]/a host_whitelist = '"$WHITELIST_VALUE" "$INI_FILE"
+  awk -v val="$WHITELIST_VALUE" '/^\[misc\]/{print; print "host_whitelist = " val; next}1' \
+    "$INI_FILE" > "${INI_FILE}.tmp" && mv -f "${INI_FILE}.tmp" "$INI_FILE"
 fi
 
 echo "SABnzbd host_whitelist set to: $WHITELIST_VALUE"
