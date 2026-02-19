@@ -8,7 +8,12 @@ use servarr_crds::{AppConfig, AppDefaults, AppType, NetworkPolicyConfig, Servarr
 
 use crate::common;
 
-const DEFAULT_DENIED_CIDRS: &[&str] = &["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
+const DEFAULT_DENIED_CIDRS: &[&str] = &[
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16", // link-local, includes cloud metadata (169.254.169.254)
+];
 
 pub fn build(app: &ServarrApp) -> NetworkPolicy {
     let defaults = AppDefaults::for_app(&app.spec.app);
