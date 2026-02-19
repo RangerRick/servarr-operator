@@ -28,3 +28,4 @@ anyhow = "1.0.101"
 
 servarr-crds = { path = "crates/servarr-crds" }
 servarr-resources = { path = "crates/servarr-resources" }
+wiremock = "0.6"
