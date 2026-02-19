@@ -2,7 +2,7 @@ use kube::Client;
 use kube::runtime::events::Reporter;
 use servarr_crds::ImageSpec;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Context {
     pub client: Client,
@@ -11,6 +11,14 @@ pub struct Context {
     pub image_overrides: HashMap<String, ImageSpec>,
     /// Reporter identity used when publishing Kubernetes Events.
     pub reporter: Reporter,
+    /// The namespace to watch. When `Some`, the operator uses `Api::namespaced()`
+    /// and only needs `Role`/`RoleBinding` privileges. When `None`, the operator
+    /// watches all namespaces and requires `ClusterRole`/`ClusterRoleBinding`.
+    ///
+    /// Defaults to the pod's own namespace (from `WATCH_NAMESPACE` env, typically
+    /// set via the downward API). Set `WATCH_ALL_NAMESPACES=true` to opt into
+    /// cluster-scoped mode.
+    pub watch_namespace: Option<String>,
 }
 
 impl Context {
@@ -20,10 +28,46 @@ impl Context {
             controller: "servarr-operator".into(),
             instance: std::env::var("POD_NAME").ok(),
         };
+        let watch_all = match std::env::var("WATCH_ALL_NAMESPACES") {
+            Ok(v)
+                if v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes") =>
+            {
+                true
+            }
+            Ok(v)
+                if v.eq_ignore_ascii_case("false")
+                    || v == "0"
+                    || v.eq_ignore_ascii_case("no")
+                    || v.is_empty() =>
+            {
+                false
+            }
+            Ok(v) => {
+                warn!(
+                    value = %v,
+                    "unrecognized WATCH_ALL_NAMESPACES value, expected true/false/1/0/yes/no; defaulting to false"
+                );
+                false
+            }
+            Err(_) => false,
+        };
+        let watch_namespace = if watch_all {
+            None
+        } else {
+            std::env::var("WATCH_NAMESPACE")
+                .ok()
+                .filter(|s| !s.is_empty())
+        };
+        if let Some(ref ns) = watch_namespace {
+            info!(%ns, "namespace-scoped mode");
+        } else {
+            info!("cluster-scoped mode (watching all namespaces)");
+        }
         Self {
             client,
             image_overrides,
             reporter,
+            watch_namespace,
         }
     }
 }

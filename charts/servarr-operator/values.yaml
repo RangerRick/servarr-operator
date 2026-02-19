@@ -14,6 +14,10 @@ resources:
 webhook:
   enabled: true
 
+# By default the operator watches only its own namespace (Role/RoleBinding).
+# Set to true to watch all namespaces (ClusterRole/ClusterRoleBinding).
+watchAllNamespaces: false
+
 nodeSelector: {}
 tolerations: []
 

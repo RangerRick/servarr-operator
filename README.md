@@ -112,11 +112,25 @@ spec:
 ### Install
 
 ```bash
-kubectl create namespace servarr-system
+kubectl create namespace servarr
 
+# Install CRDs (requires cluster-admin)
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds
+
+# Install operator
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
-  --namespace servarr-system
+  --namespace servarr
+```
+
+To watch all namespaces (requires cluster-admin for the operator):
+
+```bash
+helm install servarr-operator \
+  oci://ghcr.io/rangerrick/servarr/servarr-operator \
+  --namespace servarr \
+  --set watchAllNamespaces=true
 ```
 
 ### Deploy an app

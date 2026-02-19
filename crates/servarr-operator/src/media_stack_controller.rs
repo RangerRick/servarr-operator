@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures::StreamExt;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::api::{Api, ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher;
@@ -40,21 +39,19 @@ pub fn print_crd() -> Result<()> {
 
 pub async fn run(server_state: crate::server::ServerState) -> Result<()> {
     let client = Client::try_default().await?;
-
-    // Ensure MediaStack CRD is registered
-    let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-    crds.patch(
-        "mediastacks.servarr.dev",
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(MediaStack::crd()),
-    )
-    .await?;
-    info!("MediaStack CRD registered");
-
-    let stacks = Api::<MediaStack>::all(client.clone());
-    let apps = Api::<ServarrApp>::all(client.clone());
-
     let ctx = Arc::new(Context::new(client.clone()));
+
+    let (stacks, apps) = if let Some(ref ns) = ctx.watch_namespace {
+        (
+            Api::<MediaStack>::namespaced(client.clone(), ns),
+            Api::<ServarrApp>::namespaced(client.clone(), ns),
+        )
+    } else {
+        (
+            Api::<MediaStack>::all(client.clone()),
+            Api::<ServarrApp>::all(client.clone()),
+        )
+    };
 
     info!("Starting media-stack controller");
     server_state.set_ready();
@@ -331,10 +328,12 @@ async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Action, 
     patch_status(client, &ns, &name, &status).await?;
 
     // Update managed-stacks gauge
-    if let Ok(stack_list) = Api::<MediaStack>::all(client.clone())
-        .list(&ListParams::default())
-        .await
-    {
+    let gauge_api = if let Some(ref ns) = ctx.watch_namespace {
+        Api::<MediaStack>::namespaced(client.clone(), ns)
+    } else {
+        Api::<MediaStack>::all(client.clone())
+    };
+    if let Ok(stack_list) = gauge_api.list(&ListParams::default()).await {
         let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         for s in &stack_list.items {
             let key = s.namespace().unwrap_or_default();
