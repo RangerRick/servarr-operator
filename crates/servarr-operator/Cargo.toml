@@ -37,5 +37,7 @@ url = "2.5.8"
 wiremock.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 http = "1"
+temp-env = "0.3"
+tower = "0.5"
 tower-test = "0.4"
 

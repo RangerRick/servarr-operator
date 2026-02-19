@@ -1843,3 +1843,202 @@ fn json_is_subset(desired: &serde_json::Value, actual: &serde_json::Value) -> bo
         _ => desired == actual,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- json_is_subset ----
+
+    #[test]
+    fn json_is_subset_both_empty_objects() {
+        assert!(json_is_subset(&json!({}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_extra_keys_in_actual() {
+        assert!(json_is_subset(&json!({"a": 1}), &json!({"a": 1, "b": 2})));
+    }
+
+    #[test]
+    fn json_is_subset_value_mismatch() {
+        assert!(!json_is_subset(&json!({"a": 1}), &json!({"a": 2})));
+    }
+
+    #[test]
+    fn json_is_subset_missing_key_in_actual() {
+        assert!(!json_is_subset(&json!({"a": 1}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_nested_objects_extra_keys() {
+        assert!(json_is_subset(
+            &json!({"a": {"b": 1}}),
+            &json!({"a": {"b": 1, "c": 2}})
+        ));
+    }
+
+    #[test]
+    fn json_is_subset_arrays_same() {
+        assert!(json_is_subset(&json!([1, 2, 3]), &json!([1, 2, 3])));
+    }
+
+    #[test]
+    fn json_is_subset_arrays_different_lengths() {
+        assert!(!json_is_subset(&json!([1, 2]), &json!([1, 2, 3])));
+    }
+
+    #[test]
+    fn json_is_subset_arrays_different_values() {
+        assert!(!json_is_subset(&json!([1, 2, 3]), &json!([1, 2, 4])));
+    }
+
+    #[test]
+    fn json_is_subset_null_vs_null() {
+        assert!(json_is_subset(&json!(null), &json!(null)));
+    }
+
+    #[test]
+    fn json_is_subset_string_equality() {
+        assert!(json_is_subset(&json!("hello"), &json!("hello")));
+    }
+
+    #[test]
+    fn json_is_subset_string_inequality() {
+        assert!(!json_is_subset(&json!("hello"), &json!("world")));
+    }
+
+    #[test]
+    fn json_is_subset_number_equality() {
+        assert!(json_is_subset(&json!(42), &json!(42)));
+    }
+
+    #[test]
+    fn json_is_subset_mixed_types() {
+        assert!(!json_is_subset(&json!(1), &json!("1")));
+    }
+
+    #[test]
+    fn json_is_subset_deeply_nested_match() {
+        let desired = json!({"a": {"b": {"c": {"d": 1}}}});
+        let actual = json!({"a": {"b": {"c": {"d": 1, "e": 2}, "f": 3}}, "g": 4});
+        assert!(json_is_subset(&desired, &actual));
+    }
+
+    #[test]
+    fn json_is_subset_deeply_nested_mismatch() {
+        let desired = json!({"a": {"b": {"c": {"d": 1}}}});
+        let actual = json!({"a": {"b": {"c": {"d": 99}}}});
+        assert!(!json_is_subset(&desired, &actual));
+    }
+
+    // ---- json_diff_paths ----
+
+    #[test]
+    fn json_diff_paths_both_empty_objects() {
+        let result = json_diff_paths(&json!({}), &json!({}), String::new());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn json_diff_paths_missing_key() {
+        let result = json_diff_paths(&json!({"key": 1}), &json!({}), String::new());
+        assert_eq!(result, vec!["key: missing in actual"]);
+    }
+
+    #[test]
+    fn json_diff_paths_different_value() {
+        let result = json_diff_paths(&json!({"key": 1}), &json!({"key": 2}), String::new());
+        assert_eq!(result, vec!["key: 1 vs 2"]);
+    }
+
+    #[test]
+    fn json_diff_paths_nested_difference() {
+        let result = json_diff_paths(
+            &json!({"parent": {"child": 1}}),
+            &json!({"parent": {"child": 2}}),
+            String::new(),
+        );
+        assert_eq!(result, vec!["parent.child: 1 vs 2"]);
+    }
+
+    #[test]
+    fn json_diff_paths_array_length_mismatch() {
+        let result = json_diff_paths(&json!({"a": [1, 2]}), &json!({"a": [1]}), String::new());
+        assert_eq!(result, vec!["a: array length 2 vs 1"]);
+    }
+
+    #[test]
+    fn json_diff_paths_array_element_difference() {
+        let result =
+            json_diff_paths(&json!({"a": [1, 2]}), &json!({"a": [1, 3]}), String::new());
+        assert_eq!(result, vec!["a[1]: 2 vs 3"]);
+    }
+
+    #[test]
+    fn json_diff_paths_multiple_differences() {
+        let result = json_diff_paths(
+            &json!({"a": 1, "b": 2}),
+            &json!({"a": 10, "b": 20}),
+            String::new(),
+        );
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"a: 1 vs 10".to_string()));
+        assert!(result.contains(&"b: 2 vs 20".to_string()));
+    }
+
+    #[test]
+    fn json_diff_paths_root_path_empty_no_leading_dot() {
+        let result = json_diff_paths(&json!({"x": 1}), &json!({"x": 2}), String::new());
+        // Should be "x: ..." not ".x: ..."
+        assert!(result[0].starts_with("x:"));
+    }
+
+    // ---- app_type_to_kind ----
+
+    #[test]
+    fn app_type_to_kind_sonarr() {
+        assert!(matches!(app_type_to_kind(&AppType::Sonarr), AppKind::Sonarr));
+    }
+
+    #[test]
+    fn app_type_to_kind_radarr() {
+        assert!(matches!(app_type_to_kind(&AppType::Radarr), AppKind::Radarr));
+    }
+
+    #[test]
+    fn app_type_to_kind_lidarr() {
+        assert!(matches!(app_type_to_kind(&AppType::Lidarr), AppKind::Lidarr));
+    }
+
+    #[test]
+    fn app_type_to_kind_prowlarr() {
+        assert!(matches!(
+            app_type_to_kind(&AppType::Prowlarr),
+            AppKind::Prowlarr
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "AppKind not supported")]
+    fn app_type_to_kind_unsupported_panics() {
+        app_type_to_kind(&AppType::Sabnzbd);
+    }
+
+    // ---- chrono_now ----
+
+    #[test]
+    fn chrono_now_returns_valid_iso8601() {
+        let now = chrono_now();
+        assert!(now.contains('T'), "should contain T separator: {now}");
+        assert!(now.ends_with('Z'), "should end with Z: {now}");
+    }
+
+    // ---- print_crd ----
+
+    #[test]
+    fn print_crd_returns_ok() {
+        assert!(print_crd().is_ok());
+    }
+}

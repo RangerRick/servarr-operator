@@ -392,3 +392,20 @@ fn chrono_now() -> String {
     use chrono::{SecondsFormat, Utc};
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_crd_returns_ok() {
+        assert!(print_crd().is_ok());
+    }
+
+    #[test]
+    fn chrono_now_returns_valid_iso8601() {
+        let now = chrono_now();
+        assert!(now.contains('T'), "should contain T separator: {now}");
+        assert!(now.ends_with('Z'), "should end with Z: {now}");
+    }
+}
