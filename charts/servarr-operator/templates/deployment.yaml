@@ -46,6 +46,9 @@ spec:
             - name: WEBHOOK_ENABLED
               value: "true"
             {{- end }}
+            # Namespace scoping — these env vars are internal to the operator
+            # and must stay in sync with the RBAC resources in this chart.
+            # Configure via .Values.watchAllNamespaces, not by editing env vars directly.
             {{- if .Values.watchAllNamespaces }}
             - name: WATCH_ALL_NAMESPACES
               value: "true"

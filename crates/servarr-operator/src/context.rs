@@ -2,7 +2,7 @@ use kube::Client;
 use kube::runtime::events::Reporter;
 use servarr_crds::ImageSpec;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Context {
     pub client: Client,
@@ -28,9 +28,29 @@ impl Context {
             controller: "servarr-operator".into(),
             instance: std::env::var("POD_NAME").ok(),
         };
-        let watch_all = std::env::var("WATCH_ALL_NAMESPACES")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        let watch_all = match std::env::var("WATCH_ALL_NAMESPACES") {
+            Ok(v)
+                if v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes") =>
+            {
+                true
+            }
+            Ok(v)
+                if v.eq_ignore_ascii_case("false")
+                    || v == "0"
+                    || v.eq_ignore_ascii_case("no")
+                    || v.is_empty() =>
+            {
+                false
+            }
+            Ok(v) => {
+                warn!(
+                    value = %v,
+                    "unrecognized WATCH_ALL_NAMESPACES value, expected true/false/1/0/yes/no; defaulting to false"
+                );
+                false
+            }
+            Err(_) => false,
+        };
         let watch_namespace = if watch_all {
             None
         } else {
