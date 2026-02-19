@@ -103,7 +103,7 @@ jobs:
         run: cargo test --workspace
 
   crd-drift:
-    needs: [fmt, actionlint, zizmor]
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -111,11 +111,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - name: Download operator binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: operator-binary
+          path: /tmp/bin
 
-      - name: Regenerate CRDs
-        run: bash scripts/generate-crds.sh
+      - name: Regenerate CRDs from pre-built binary
+        run: |
+          chmod +x /tmp/bin/servarr-operator
+          /tmp/bin/servarr-operator crd > /tmp/all-crds.yaml
+          export TMPDIR_SPLIT
+          TMPDIR_SPLIT=$(mktemp -d)
+          awk '
+          /^apiVersion:/ { n++ }
+          n == 1 { print > (ENVIRON["TMPDIR_SPLIT"] "/crd-1.yaml") }
+          n == 2 { print > (ENVIRON["TMPDIR_SPLIT"] "/crd-2.yaml") }
+          ' /tmp/all-crds.yaml
+          for f in "$TMPDIR_SPLIT"/crd-*.yaml; do
+            [ -s "$f" ] || continue
+            name=$(grep -m1 '^  name:' "$f" | awk '{print $2}')
+            case "$name" in
+              servarrapps.servarr.dev) cp -f "$f" charts/servarr-crds/templates/servarrapp-crd.yaml ;;
+              mediastacks.servarr.dev) cp -f "$f" charts/servarr-crds/templates/mediastack-crd.yaml ;;
+            esac
+          done
 
       - name: Check for CRD drift
         run: |
@@ -148,6 +168,13 @@ jobs:
 
       - name: Build static release binary
         run: cargo build --release --target x86_64-unknown-linux-musl --bin servarr-operator
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-binary
+          path: target/x86_64-unknown-linux-musl/release/servarr-operator
+          retention-days: 1
 
       - name: Package Docker image
         run: |
