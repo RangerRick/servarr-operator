@@ -268,8 +268,17 @@ async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Er
         }
     }
 
-    // Build and apply NetworkPolicy (if enabled)
-    let network_policy_enabled = app.spec.network_policy.unwrap_or(true);
+    // Build and apply NetworkPolicy.
+    // Enabled when: network_policy_config is set (takes precedence), or the
+    // boolean network_policy flag is true (default).
+    let has_explicit_config = app.spec.network_policy_config.is_some();
+    let network_policy_enabled = has_explicit_config || app.spec.network_policy.unwrap_or(true);
+    if has_explicit_config && app.spec.network_policy == Some(false) {
+        tracing::debug!(
+            app = %name,
+            "network_policy_config is set; overriding network_policy=false"
+        );
+    }
     if network_policy_enabled {
         let np = servarr_resources::networkpolicy::build(&app);
         let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), &ns);
