@@ -66,10 +66,12 @@ jobs:
 
       - name: Lint charts
         run: |
-          helm lint charts/servarr-crds/
+          helm lint charts/servarr-crds/ --set operatorNamespace=servarr
           helm lint charts/servarr-operator/
-          helm template test charts/servarr-crds/ > /dev/null
+          helm template test charts/servarr-crds/ --set operatorNamespace=servarr > /dev/null
+          helm template test charts/servarr-crds/ --set webhook.enabled=false > /dev/null
           helm template test charts/servarr-operator/ > /dev/null
+          helm template test charts/servarr-operator/ --set watchAllNamespaces=true > /dev/null
 
   # ── Stage 2: Analysis + Build (parallel) ────────────────────────
   clippy:
