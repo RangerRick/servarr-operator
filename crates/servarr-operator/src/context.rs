@@ -11,6 +11,9 @@ pub struct Context {
     pub image_overrides: HashMap<String, ImageSpec>,
     /// Reporter identity used when publishing Kubernetes Events.
     pub reporter: Reporter,
+    /// When set, the operator only watches resources in this namespace
+    /// instead of watching all namespaces (cluster-scoped mode).
+    pub watch_namespace: Option<String>,
 }
 
 impl Context {
@@ -20,10 +23,17 @@ impl Context {
             controller: "servarr-operator".into(),
             instance: std::env::var("POD_NAME").ok(),
         };
+        let watch_namespace = std::env::var("WATCH_NAMESPACE").ok().filter(|s| !s.is_empty());
+        if let Some(ref ns) = watch_namespace {
+            info!(%ns, "namespace-scoped mode enabled");
+        } else {
+            info!("cluster-scoped mode (watching all namespaces)");
+        }
         Self {
             client,
             image_overrides,
             reporter,
+            watch_namespace,
         }
     }
 }

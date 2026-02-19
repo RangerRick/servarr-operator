@@ -6,7 +6,6 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Secret, Service};
 use k8s_openapi::api::networking::v1::NetworkPolicy;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder};
@@ -53,23 +52,23 @@ pub fn print_crd() -> Result<()> {
 
 pub async fn run(server_state: crate::server::ServerState) -> Result<()> {
     let client = Client::try_default().await?;
-
-    // Ensure CRD is registered
-    let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
-    crds.patch(
-        "servarrapps.servarr.dev",
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(ServarrApp::crd()),
-    )
-    .await?;
-    info!("CRD registered");
-
-    let apps = Api::<ServarrApp>::all(client.clone());
-    let deployments = Api::<Deployment>::all(client.clone());
-    let services = Api::<Service>::all(client.clone());
-    let config_maps = Api::<ConfigMap>::all(client.clone());
-
     let ctx = Arc::new(Context::new(client.clone()));
+
+    let (apps, deployments, services, config_maps) = if let Some(ref ns) = ctx.watch_namespace {
+        (
+            Api::<ServarrApp>::namespaced(client.clone(), ns),
+            Api::<Deployment>::namespaced(client.clone(), ns),
+            Api::<Service>::namespaced(client.clone(), ns),
+            Api::<ConfigMap>::namespaced(client.clone(), ns),
+        )
+    } else {
+        (
+            Api::<ServarrApp>::all(client.clone()),
+            Api::<Deployment>::all(client.clone()),
+            Api::<Service>::all(client.clone()),
+            Api::<ConfigMap>::all(client.clone()),
+        )
+    };
 
     info!("Starting Servarr Operator controller");
     server_state.set_ready();
@@ -438,10 +437,12 @@ async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action, Er
     increment_reconcile_total(app_type, "success");
 
     // Update managed-apps gauge from informer cache
-    if let Ok(app_list) = Api::<ServarrApp>::all(client.clone())
-        .list(&kube::api::ListParams::default())
-        .await
-    {
+    let gauge_api = if let Some(ref ns) = ctx.watch_namespace {
+        Api::<ServarrApp>::namespaced(client.clone(), ns)
+    } else {
+        Api::<ServarrApp>::all(client.clone())
+    };
+    if let Ok(app_list) = gauge_api.list(&kube::api::ListParams::default()).await {
         let mut counts: std::collections::HashMap<(String, String), i64> =
             std::collections::HashMap::new();
         for a in &app_list.items {
