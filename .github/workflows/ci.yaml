@@ -101,8 +101,28 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2.52.4
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run tests with coverage
+        run: |
+          threshold=$(cat .coverage-threshold)
+          cargo llvm-cov --workspace --fail-under-lines "$threshold" --summary-only 2>&1 | tee /tmp/coverage-summary.txt
+
+      - name: Post coverage summary
+        if: always()
+        run: |
+          {
+            echo "### Code Coverage"
+            echo ""
+            echo '```'
+            tail -5 /tmp/coverage-summary.txt
+            echo '```'
+            echo ""
+            echo "Threshold: $(cat .coverage-threshold)% lines"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   crd-drift:
     needs: [build]
