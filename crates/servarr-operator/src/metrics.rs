@@ -234,7 +234,7 @@ mod tests {
         // Trigger at least one metric so the family is populated.
         increment_reconcile_total("gather_test", "success");
         let families = prometheus::gather();
-        let names: Vec<&str> = families.iter().map(|f| f.get_name()).collect();
+        let names: Vec<&str> = families.iter().map(|f| f.name()).collect();
         assert!(names.contains(&"servarr_operator_reconcile_total"));
     }
 }

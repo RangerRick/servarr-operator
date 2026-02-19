@@ -16,6 +16,14 @@ pub struct ServerState {
     ready: Arc<AtomicBool>,
 }
 
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 impl ServerState {
     pub fn new() -> Self {
         Self {

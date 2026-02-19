@@ -578,11 +578,13 @@ mod tests {
 
     #[test]
     fn system_status_from_radarr_converts_fields() {
-        let mut r = radarr::models::SystemResource::default();
-        r.app_name = make_oo("Radarr");
-        r.version = make_oo("5.0.0");
-        r.is_production = Some(true);
-        r.os_name = make_oo("Linux");
+        let r = radarr::models::SystemResource {
+            app_name: make_oo("Radarr"),
+            version: make_oo("5.0.0"),
+            is_production: Some(true),
+            os_name: make_oo("Linux"),
+            ..Default::default()
+        };
 
         let s = system_status_from_radarr(r);
         assert_eq!(s.app_name, "Radarr");
@@ -593,10 +595,12 @@ mod tests {
 
     #[test]
     fn system_status_from_lidarr_converts_fields() {
-        let mut r = lidarr::models::SystemResource::default();
-        r.app_name = make_oo("Lidarr");
-        r.version = make_oo("2.0.0");
-        r.is_debug = Some(true);
+        let r = lidarr::models::SystemResource {
+            app_name: make_oo("Lidarr"),
+            version: make_oo("2.0.0"),
+            is_debug: Some(true),
+            ..Default::default()
+        };
 
         let s = system_status_from_lidarr(r);
         assert_eq!(s.app_name, "Lidarr");
@@ -606,10 +610,12 @@ mod tests {
 
     #[test]
     fn system_status_from_prowlarr_converts_fields() {
-        let mut r = prowlarr::models::SystemResource::default();
-        r.app_name = make_oo("Prowlarr");
-        r.version = make_oo("1.5.0");
-        r.runtime_name = make_oo(".NET");
+        let r = prowlarr::models::SystemResource {
+            app_name: make_oo("Prowlarr"),
+            version: make_oo("1.5.0"),
+            runtime_name: make_oo(".NET"),
+            ..Default::default()
+        };
 
         let s = system_status_from_prowlarr(r);
         assert_eq!(s.app_name, "Prowlarr");
@@ -619,10 +625,12 @@ mod tests {
 
     #[test]
     fn system_status_from_sonarr_converts_fields() {
-        let mut r = sonarr::models::SystemResource::default();
-        r.app_name = make_oo("Sonarr");
-        r.version = make_oo("4.0.0");
-        r.startup_path = make_oo("/opt/sonarr");
+        let r = sonarr::models::SystemResource {
+            app_name: make_oo("Sonarr"),
+            version: make_oo("4.0.0"),
+            startup_path: make_oo("/opt/sonarr"),
+            ..Default::default()
+        };
 
         let s = system_status_from_sonarr(r);
         assert_eq!(s.app_name, "Sonarr");

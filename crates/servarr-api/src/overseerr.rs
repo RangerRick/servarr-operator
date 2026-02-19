@@ -127,10 +127,8 @@ mod tests {
     fn map_err_formats_debug() {
         // The overseerr SDK Error type wraps a reqwest error or a response body.
         // We can test map_err by constructing an ApiError from a simple Debug value.
-        let sdk_err: overseerr::apis::Error<()> = overseerr::apis::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "test io error",
-        ));
+        let sdk_err: overseerr::apis::Error<()> =
+            overseerr::apis::Error::Io(std::io::Error::other("test io error"));
         let api_err = map_err(sdk_err);
         match api_err {
             ApiError::ApiResponse { status, body } => {
