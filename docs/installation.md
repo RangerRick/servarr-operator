@@ -49,6 +49,34 @@ This guide covers installing the Servarr Operator Helm chart into a Kubernetes c
    See [Backup and Restore](backup-restore.md#volume-level-backups-with-velero)
    for full configuration details including storage locations and schedules.
 
+## Install CRDs
+
+The operator's Custom Resource Definitions are packaged as a separate Helm chart.
+This step requires cluster-admin privileges and only needs to be done once per
+cluster.
+
+```bash
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds
+```
+
+To configure the validating webhook, set the namespace where the operator will
+be installed:
+
+```bash
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds \
+  --set operatorNamespace=servarr
+```
+
+To disable webhooks (removes the cert-manager dependency for CRDs):
+
+```bash
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds \
+  --set webhook.enabled=false
+```
+
 ## Install the Operator
 
 1. Create a namespace for the operator:
@@ -74,10 +102,27 @@ This guide covers installing the Servarr Operator Helm chart into a Kubernetes c
      --version 0.1.0
    ```
 
+### Namespace-Scoped Mode
+
+By default the operator watches all namespaces and requires `ClusterRole`
+privileges. To restrict it to a single namespace (using `Role`/`RoleBinding`
+instead), set `watchNamespace`:
+
+```bash
+helm install servarr-operator \
+  oci://ghcr.io/rangerrick/servarr/servarr-operator \
+  --namespace servarr \
+  --set watchNamespace=servarr
+```
+
+This is useful in shared clusters where the operator deployer only has
+namespace-admin privileges. The CRDs chart still requires a one-time
+cluster-admin install.
+
 ## Helm Values Reference
 
-Below are the key values you can override. See `chart/values.yaml` for the
-full file.
+Below are the key values you can override. See `charts/servarr-operator/values.yaml`
+for the full file.
 
 ### image
 
@@ -102,6 +147,12 @@ helm install servarr-operator \
 | `resources.limits.memory` | `256Mi` | Memory limit |
 | `resources.requests.cpu` | `50m` | CPU request |
 | `resources.requests.memory` | `64Mi` | Memory request |
+
+### watchNamespace
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `watchNamespace` | `""` | Restrict operator to a single namespace (uses Role/RoleBinding instead of ClusterRole/ClusterRoleBinding) |
 
 ### webhook
 

@@ -114,9 +114,23 @@ spec:
 ```bash
 kubectl create namespace servarr
 
+# Install CRDs (requires cluster-admin)
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds
+
+# Install operator
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
   --namespace servarr
+```
+
+For namespace-scoped mode (no cluster-admin required for the operator):
+
+```bash
+helm install servarr-operator \
+  oci://ghcr.io/rangerrick/servarr/servarr-operator \
+  --namespace servarr \
+  --set watchNamespace=servarr
 ```
 
 ### Deploy an app
