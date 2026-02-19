@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use kube::Client;
 use kube::api::{Api, ListParams};
 use serde::{Deserialize, Serialize};
-use servarr_crds::{AppConfig, AppType, ServarrApp, ServarrAppSpec};
+use servarr_crds::{AppConfig, AppType, ServarrApp, ServarrAppSpec, SshMode};
 use tracing::{debug, info, warn};
 
 const DEFAULT_WEBHOOK_PORT: u16 = 9443;
@@ -219,6 +219,9 @@ async fn validate_spec(
     // Rule 9: IndexerDefinition names must be alphanumeric with optional hyphens
     validate_indexer_definition_names(&parsed, &mut errors);
 
+    // Rule 10: SSH bastion shell overrides not allowed in restricted modes
+    validate_ssh_shell_override(&parsed, &mut errors);
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -257,6 +260,26 @@ fn validate_identity_immutable(
                 "spec.instance is immutable (was {:?}, got {:?})",
                 old.instance, spec.instance
             ));
+        }
+    }
+}
+
+fn validate_ssh_shell_override(spec: &ServarrAppSpec, errors: &mut Vec<String>) {
+    if let Some(AppConfig::SshBastion(ref sc)) = spec.app_config
+        && sc.mode == SshMode::RestrictedRsync
+    {
+        for user in &sc.users {
+            if user.shell.is_some() {
+                debug!(
+                    user = %user.name,
+                    shell = ?user.shell,
+                    "rejecting shell override in restricted-rsync mode"
+                );
+                errors.push(format!(
+                    "appConfig.sshBastion.users[{}].shell cannot be overridden in restricted-rsync mode",
+                    user.name
+                ));
+            }
         }
     }
 }
