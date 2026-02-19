@@ -69,9 +69,11 @@ if [[ -z "$CMD_STRING" ]]; then
   log_reject "Interactive sessions not allowed"
 fi
 
-# Parse command string into array (preserves quoted arguments with spaces)
+# Parse command string into array safely (no eval)
+# rsync --server always produces simple space-separated arguments without
+# shell metacharacters, so read -ra is safe and avoids code injection.
 declare -a ARGS
-eval "ARGS=($CMD_STRING)"
+read -ra ARGS <<< "$CMD_STRING"
 
 # Must have at least the command name
 if [[ ${{#ARGS[@]}} -lt 1 ]]; then
