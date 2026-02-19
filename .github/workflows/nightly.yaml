@@ -1,0 +1,46 @@
+name: Nightly
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "LICENSE"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.v.outputs.date }}
+      chart-version: ${{ steps.v.outputs.chart_version }}
+    steps:
+      - name: Compute nightly version
+        id: v
+        run: |
+          date_stamp=$(date -u +%Y%m%d)
+          echo "date=${date_stamp}" >> "$GITHUB_OUTPUT"
+          echo "chart_version=0.0.0-nightly.${date_stamp}" >> "$GITHUB_OUTPUT"
+
+  ci:
+    uses: ./.github/workflows/_ci.yaml
+
+  publish:
+    needs: [version, ci]
+    uses: ./.github/workflows/_publish.yaml
+    with:
+      image-tags: |-
+        nightly
+        nightly-${{ needs.version.outputs.date }}
+      image-version-label: nightly-${{ needs.version.outputs.date }}
+      chart-version: ${{ needs.version.outputs.chart-version }}
+      chart-app-version: nightly-${{ needs.version.outputs.date }}

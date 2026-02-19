@@ -1,0 +1,87 @@
+# Reusable workflow: run tests and build multi-arch static binaries.
+# Called by release.yaml and nightly.yaml.
+name: _CI
+
+on:
+  workflow_call:
+    inputs:
+      artifact-retention-days:
+        description: "Days to retain build artifacts"
+        type: number
+        default: 1
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run tests with coverage
+        run: |
+          threshold=$(cat .coverage-threshold)
+          cargo llvm-cov --workspace --fail-under-lines "$threshold" --summary-only
+
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: amd64
+          - target: aarch64-unknown-linux-musl
+            arch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          cache-on-failure: true
+          key: musl-${{ matrix.arch }}
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+          rustup target add ${{ matrix.target }}
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+            mkdir -p .cargo
+            cat > .cargo/config.toml <<'TOML'
+          [target.aarch64-unknown-linux-musl]
+          linker = "aarch64-linux-gnu-gcc"
+          TOML
+          fi
+
+      - name: Build static release binary
+        run: cargo build --release --target ${{ matrix.target }} --bin servarr-operator
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: operator-binary-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/servarr-operator
+          retention-days: ${{ inputs.artifact-retention-days }}
