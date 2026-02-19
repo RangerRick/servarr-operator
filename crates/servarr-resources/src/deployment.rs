@@ -217,7 +217,16 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
                         );
                     }
                     if let Some(ref user_annotations) = app.spec.pod_annotations {
-                        annotations.extend(user_annotations.clone());
+                        for (k, v) in user_annotations {
+                            if annotations.contains_key(k) {
+                                tracing::debug!(
+                                    annotation = %k,
+                                    "skipping user pod annotation that conflicts with operator-managed key"
+                                );
+                            } else {
+                                annotations.insert(k.clone(), v.clone());
+                            }
+                        }
                     }
                     if !annotations.is_empty() {
                         pod_meta.annotations = Some(annotations);
