@@ -525,8 +525,28 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
         });
     }
 
-    // User-specified env vars (override defaults)
+    // Env var names managed by the operator for SSH bastion security.
+    // User-specified env vars must not override these.
+    const SSH_MANAGED_ENV: &[&str] = &[
+        "SSH_USERS",
+        "SSH_ENABLE_PASSWORD_AUTH",
+        "TCP_FORWARDING",
+        "GATEWAY_PORTS",
+        "SFTP_MODE",
+        "SFTP_CHROOT",
+    ];
+
+    // User-specified env vars (override defaults, but not operator-managed keys)
     for e in &app.spec.env {
+        if matches!(app.spec.app, AppType::SshBastion) && SSH_MANAGED_ENV.contains(&e.name.as_str())
+        {
+            tracing::warn!(
+                env = %e.name,
+                app = %app.spec.app,
+                "ignoring user env var that conflicts with operator-managed SSH setting"
+            );
+            continue;
+        }
         // Remove any default with same name
         env.retain(|existing| existing.name != e.name);
         env.push(EnvVar {
