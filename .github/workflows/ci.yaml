@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
 
       - name: Run actionlint
-        uses: reviewdog/action-actionlint@e58ee9d111489c31395fbe4857b0be6e7635dbda # v1.70.0
+        uses: reviewdog/action-actionlint@0d952c597ef8459f634d7145b0b044a9699e5e43 # v1.71.0
 
   zizmor:
     runs-on: ubuntu-latest
@@ -101,8 +101,28 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run tests with coverage
+        run: |
+          threshold=$(cat .coverage-threshold)
+          cargo llvm-cov --workspace --fail-under-lines "$threshold" --summary-only 2>&1 | tee /tmp/coverage-summary.txt
+
+      - name: Post coverage summary
+        if: always()
+        run: |
+          {
+            echo "### Code Coverage"
+            echo ""
+            echo '```'
+            tail -5 /tmp/coverage-summary.txt
+            echo '```'
+            echo ""
+            echo "Threshold: $(cat .coverage-threshold)% lines"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   crd-drift:
     needs: [build]
@@ -114,7 +134,7 @@ jobs:
           persist-credentials: false
 
       - name: Download operator binary
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: operator-binary
           path: /tmp/bin
@@ -172,7 +192,7 @@ jobs:
         run: cargo build --release --target x86_64-unknown-linux-musl --bin servarr-operator
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-binary
           path: target/x86_64-unknown-linux-musl/release/servarr-operator
@@ -192,7 +212,7 @@ jobs:
         run: docker save servarr-operator:ci | gzip > /tmp/servarr-operator-ci.tar.gz
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-image
           path: /tmp/servarr-operator-ci.tar.gz
@@ -209,7 +229,7 @@ jobs:
           persist-credentials: false
 
       - name: Download operator image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: operator-image
           path: /tmp
@@ -226,7 +246,7 @@ jobs:
           echo "key=app-images-${hash}" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached app images
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: /tmp/app-images
           key: ${{ steps.image-cache-key.outputs.key }}
