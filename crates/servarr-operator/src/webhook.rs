@@ -23,12 +23,20 @@ pub struct WebhookConfig {
 
 impl Default for WebhookConfig {
     fn default() -> Self {
-        Self {
-            port: std::env::var("WEBHOOK_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_WEBHOOK_PORT),
-        }
+        let port = match std::env::var("WEBHOOK_PORT") {
+            Ok(s) => match s.parse::<u16>() {
+                Ok(p) => {
+                    debug!(port = p, "using WEBHOOK_PORT from env");
+                    p
+                }
+                Err(e) => {
+                    warn!(value = %s, error = %e, "invalid WEBHOOK_PORT, using default {DEFAULT_WEBHOOK_PORT}");
+                    DEFAULT_WEBHOOK_PORT
+                }
+            },
+            Err(_) => DEFAULT_WEBHOOK_PORT,
+        };
+        Self { port }
     }
 }
 
