@@ -117,6 +117,58 @@ helm install servarr-operator \
 The CRDs chart still requires a one-time cluster-admin install regardless of
 which mode the operator runs in.
 
+## Release Channels
+
+The operator is published to `ghcr.io` in two channels: stable releases and
+nightly builds.
+
+### Stable Releases
+
+Stable versions are published when a Git tag (`v*`) is pushed. Both the
+container image and Helm charts use semver (e.g. `1.0.0`):
+
+```bash
+# Install a specific stable release
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds \
+  --version 1.0.0
+
+helm install servarr-operator \
+  oci://ghcr.io/rangerrick/servarr/servarr-operator \
+  --namespace servarr \
+  --version 1.0.0
+```
+
+Omitting `--version` installs the latest stable release.
+
+### Nightly Builds
+
+Every push to `main` publishes a nightly build. Container images are tagged
+`nightly` (floating) and `nightly-YYYYMMDD` (date-stamped). Helm charts use
+version `0.0.0-nightly.YYYYMMDD`.
+
+```bash
+# Install the latest nightly
+helm install servarr-crds \
+  oci://ghcr.io/rangerrick/servarr/servarr-crds \
+  --version 0.0.0-nightly.20260219
+
+helm install servarr-operator \
+  oci://ghcr.io/rangerrick/servarr/servarr-operator \
+  --namespace servarr \
+  --version 0.0.0-nightly.20260219
+```
+
+To use the container image directly without Helm:
+
+```bash
+docker pull ghcr.io/rangerrick/servarr-operator:nightly
+# or a specific date:
+docker pull ghcr.io/rangerrick/servarr-operator:nightly-20260219
+```
+
+Nightly builds older than 7 days are automatically cleaned up.
+
 ## Helm Values Reference
 
 Below are the key values you can override. See `charts/servarr-operator/values.yaml`
@@ -126,7 +178,7 @@ for the full file.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` | `ghcr.io/ranger/servarr-operator` | Operator container image |
+| `image.repository` | `ghcr.io/rangerrick/servarr-operator` | Operator container image |
 | `image.tag` | `""` (defaults to `appVersion`) | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
 
@@ -242,7 +294,14 @@ helm install servarr-operator \
 
 ## Upgrading
 
-1. Update to the latest chart version:
+1. Upgrade CRDs first (if the new version includes CRD changes):
+
+   ```bash
+   helm upgrade servarr-crds \
+     oci://ghcr.io/rangerrick/servarr/servarr-crds
+   ```
+
+2. Upgrade the operator:
 
    ```bash
    helm upgrade servarr-operator \
@@ -250,7 +309,16 @@ helm install servarr-operator \
      --namespace servarr
    ```
 
-2. Verify the rollout completed:
+   To upgrade to a specific version:
+
+   ```bash
+   helm upgrade servarr-operator \
+     oci://ghcr.io/rangerrick/servarr/servarr-operator \
+     --namespace servarr \
+     --version 1.1.0
+   ```
+
+3. Verify the rollout completed:
 
    ```bash
    kubectl rollout status deployment/servarr-operator -n servarr

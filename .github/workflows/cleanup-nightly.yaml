@@ -1,0 +1,90 @@
+name: Cleanup Nightly
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+env:
+  # Number of days to retain nightly builds before deletion.
+  # Change this value to adjust the retention window.
+  RETENTION_DAYS: 7
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute cutoff date
+        id: cutoff
+        run: |
+          cutoff=$(date -u -d "${RETENTION_DAYS} days ago" +%Y%m%d)
+          echo "date=${cutoff}" >> "$GITHUB_OUTPUT"
+          echo "Deleting nightly versions older than ${cutoff} (${RETENTION_DAYS} days)"
+
+      - name: Delete old nightly container image tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUTOFF: ${{ steps.cutoff.outputs.date }}
+        run: |
+          cutoff="${CUTOFF}"
+          package="servarr-operator"
+
+          # List all versions of the container package
+          gh api --paginate \
+            "/user/packages/container/${package}/versions" \
+            --jq '.[] | select(.metadata.container.tags[]? | test("^nightly-[0-9]{8}$")) | {id: .id, tags: .metadata.container.tags}' \
+          | jq -c '.' | while read -r entry; do
+            version_id=$(echo "$entry" | jq -r '.id')
+            tags=$(echo "$entry" | jq -r '.tags[]')
+
+            # Check if any nightly-YYYYMMDD tag is older than cutoff
+            for tag in $tags; do
+              if [[ "$tag" =~ ^nightly-([0-9]{8})$ ]]; then
+                tag_date="${BASH_REMATCH[1]}"
+                if [[ "$tag_date" < "$cutoff" ]]; then
+                  echo "Deleting ${package} version ${version_id} (tag: ${tag})"
+                  gh api --method DELETE \
+                    "/user/packages/container/${package}/versions/${version_id}" \
+                    || echo "  Warning: failed to delete version ${version_id}"
+                  break
+                fi
+              fi
+            done
+          done
+
+      - name: Delete old nightly Helm chart versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUTOFF: ${{ steps.cutoff.outputs.date }}
+        run: |
+          cutoff="${CUTOFF}"
+
+          for chart in servarr-crds servarr-operator; do
+            # Helm OCI charts are stored under the "servarr" package namespace
+            package="servarr%2F${chart}"
+
+            gh api --paginate \
+              "/user/packages/container/${package}/versions" \
+              --jq '.[] | {id: .id, tags: .metadata.container.tags}' \
+            | jq -c '.' | while read -r entry; do
+              version_id=$(echo "$entry" | jq -r '.id')
+              tags=$(echo "$entry" | jq -r '.tags[]')
+
+              for tag in $tags; do
+                if [[ "$tag" =~ ^0\.0\.0-nightly\.([0-9]{8})$ ]]; then
+                  tag_date="${BASH_REMATCH[1]}"
+                  if [[ "$tag_date" < "$cutoff" ]]; then
+                    echo "Deleting ${chart} version ${version_id} (tag: ${tag})"
+                    gh api --method DELETE \
+                      "/user/packages/container/${package}/versions/${version_id}" \
+                      || echo "  Warning: failed to delete version ${version_id}"
+                    break
+                  fi
+                fi
+              done
+            done
+          done

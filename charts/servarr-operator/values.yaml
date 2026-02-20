@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/ranger/servarr-operator
+  repository: ghcr.io/rangerrick/servarr-operator
   tag: ""  # defaults to appVersion
   pullPolicy: IfNotPresent
 
