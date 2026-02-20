@@ -28,8 +28,9 @@ jobs:
       - name: Delete old nightly container image tags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUTOFF: ${{ steps.cutoff.outputs.date }}
         run: |
-          cutoff="${{ steps.cutoff.outputs.date }}"
+          cutoff="${CUTOFF}"
           package="servarr-operator"
 
           # List all versions of the container package
@@ -58,8 +59,9 @@ jobs:
       - name: Delete old nightly Helm chart versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUTOFF: ${{ steps.cutoff.outputs.date }}
         run: |
-          cutoff="${{ steps.cutoff.outputs.date }}"
+          cutoff="${CUTOFF}"
 
           for chart in servarr-crds servarr-operator; do
             # Helm OCI charts are stored under the "servarr" package namespace
