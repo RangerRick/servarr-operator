@@ -15,7 +15,6 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   version:
@@ -36,6 +35,9 @@ jobs:
 
   publish:
     needs: [version, ci]
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/_publish.yaml
     with:
       image-tags: |-
