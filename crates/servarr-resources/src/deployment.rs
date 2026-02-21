@@ -61,11 +61,17 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
     let security = app.spec.security.as_ref().unwrap_or(&defaults.security);
     let svc_spec = app.spec.service.as_ref().unwrap_or(&defaults.service);
     let resources = app.spec.resources.as_ref().unwrap_or(&defaults.resources);
-    let persistence = app
-        .spec
-        .persistence
-        .as_ref()
-        .unwrap_or(&defaults.persistence);
+    // Always merge the app-type default persistence with the spec so that
+    // app-type-specific PVCs (e.g. SshBastion's host-keys) are preserved even
+    // when a MediaStack injects NFS mounts via stack defaults.
+    let merged_persistence: PersistenceSpec;
+    let persistence = match &app.spec.persistence {
+        None => &defaults.persistence,
+        Some(spec) => {
+            merged_persistence = defaults.persistence.merge_with(spec);
+            &merged_persistence
+        }
+    };
     let probes = app.spec.probes.as_ref().unwrap_or(&defaults.probes);
     let uid = app.spec.uid.unwrap_or(defaults.uid);
     let gid = app.spec.gid.unwrap_or(defaults.gid);

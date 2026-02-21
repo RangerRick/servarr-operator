@@ -2493,3 +2493,91 @@ fn test_deployment_ssh_bastion_managed_env_ignored() {
     let custom = env.iter().find(|e| e.name == "CUSTOM_VAR").unwrap();
     assert_eq!(custom.value.as_deref(), Some("allowed"));
 }
+
+#[test]
+fn test_deployment_ssh_bastion_host_keys_preserved_with_nfs_mounts() {
+    // Regression test: when a ServarrApp for SshBastion has persistence set
+    // (e.g. injected by a MediaStack with NFS mounts in stack defaults), the
+    // app-type-default host-keys PVC must still appear in the deployment.
+    // Previously, the host-keys volume was dropped because deployment.rs used
+    // unwrap_or — taking the spec persistence wholesale and discarding the
+    // app-type defaults entirely.
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("media-ssh-bastion".into()),
+            namespace: Some("media".into()),
+            uid: Some("uid-ssh-nfs".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            // Persistence set by MediaStack stack defaults: NFS mounts only,
+            // no explicit PVC volumes.
+            persistence: Some(PersistenceSpec {
+                volumes: vec![],
+                nfs_mounts: vec![
+                    NfsMount {
+                        name: "media".into(),
+                        server: "nas.local".into(),
+                        path: "/volume1/media".into(),
+                        mount_path: "/media".into(),
+                        read_only: false,
+                    },
+                    NfsMount {
+                        name: "downloads".into(),
+                        server: "nas.local".into(),
+                        path: "/volume1/downloads".into(),
+                        mount_path: "/downloads".into(),
+                        read_only: false,
+                    },
+                ],
+            }),
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Sftp,
+                users: vec![SshUser {
+                    name: "admin".into(),
+                    uid: 1000,
+                    gid: 1000,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+
+    let volumes = pod_spec.volumes.as_ref().expect("pod should have volumes");
+
+    // host-keys PVC must be present despite NFS mounts being set in the spec.
+    assert!(
+        volumes.iter().any(|v| v.name == "host-keys"),
+        "host-keys PVC volume must be present even when spec.persistence contains NFS mounts; \
+         got volumes: {:?}",
+        volumes.iter().map(|v| &v.name).collect::<Vec<_>>()
+    );
+
+    // NFS mounts from the spec must also be present.
+    assert!(
+        volumes.iter().any(|v| v.name == "nfs-media"),
+        "nfs-media volume must be present"
+    );
+    assert!(
+        volumes.iter().any(|v| v.name == "nfs-downloads"),
+        "nfs-downloads volume must be present"
+    );
+
+    // generate-host-keys init container must be present and able to mount host-keys.
+    let init = pod_spec
+        .init_containers
+        .as_ref()
+        .expect("should have init containers");
+    assert!(
+        init.iter().any(|c| c.name == "generate-host-keys"),
+        "generate-host-keys init container must be present"
+    );
+}
