@@ -306,7 +306,7 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
         mounts.push(VolumeMount {
             name: format!("nfs-{}", nfs.name),
             mount_path: nfs.mount_path.clone(),
-            read_only: Some(nfs.read_only),
+            read_only: nfs.read_only.then_some(true),
             ..Default::default()
         });
     }
@@ -382,7 +382,7 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
             nfs: Some(NFSVolumeSource {
                 server: nfs.server.clone(),
                 path: nfs.path.clone(),
-                read_only: Some(nfs.read_only),
+                read_only: nfs.read_only.then_some(true),
             }),
             ..Default::default()
         });

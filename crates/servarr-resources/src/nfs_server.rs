@@ -15,8 +15,10 @@ use std::collections::BTreeMap;
 const MANAGED_BY: &str = "servarr-operator";
 const NFS_PORT: i32 = 2049;
 const COMPONENT: &str = "nfs-server";
-const DEFAULT_IMAGE: &str = "itsthenetwork/nfs-server-alpine:12";
+const DEFAULT_IMAGE: &str = "erichough/nfs-server";
 const EXPORT_DIR: &str = "/nfsshare";
+const EXPORT_OPTS: &str =
+    "*(rw,async,no_subtree_check,no_auth_nlm,insecure,no_root_squash)";
 const DATA_VOLUME: &str = "data";
 
 fn resource_name(stack_name: &str) -> String {
@@ -114,8 +116,8 @@ pub fn build_statefulset(
                         image: Some(image),
                         image_pull_policy: Some("IfNotPresent".to_string()),
                         env: Some(vec![EnvVar {
-                            name: "SHARED_DIRECTORY".to_string(),
-                            value: Some(EXPORT_DIR.to_string()),
+                            name: "NFS_EXPORT_0".to_string(),
+                            value: Some(format!("{EXPORT_DIR} {EXPORT_OPTS}")),
                             ..Default::default()
                         }]),
                         ports: Some(vec![ContainerPort {
