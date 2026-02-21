@@ -1349,6 +1349,84 @@ spec:
                     nullable: true
                     type: integer
                 type: object
+              nfs:
+                description: |-
+                  In-cluster NFS server configuration. When omitted or `enabled: true`, the
+                  operator deploys an NFS server and auto-injects media mounts into every app.
+                  Set `enabled: false` to opt out entirely, or set `externalServer` to use
+                  your own NFS.
+                nullable: true
+                properties:
+                  enabled:
+                    default: true
+                    description: |-
+                      Deploy an in-cluster NFS server. Defaults to true. Ignored when
+                      `externalServer` is set.
+                    type: boolean
+                  externalPath:
+                    default: /
+                    description: |-
+                      Root path on the external NFS server. Defaults to "/". The media path fields
+                      (`moviesPath`, `tvPath`, etc.) are relative to this root.
+                    type: string
+                  externalServer:
+                    description: |-
+                      Address of an external NFS server to use instead of deploying one in-cluster.
+                      When set, no NFS server resources are created and this address is used for
+                      all auto-injected NFS mounts. Mutually exclusive with `enabled: true`.
+                    nullable: true
+                    type: string
+                  image:
+                    description: Image override for the NFS server container.
+                    nullable: true
+                    properties:
+                      digest:
+                        default: ''
+                        type: string
+                      pullPolicy:
+                        default: IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        default: ''
+                        type: string
+                    required:
+                    - repository
+                    type: object
+                  movies4kPath:
+                    default: /data/movies-4k
+                    description: |-
+                      Path inside the NFS share for 4K movies (used when split4k is enabled).
+                      Defaults to "/data/movies-4k".
+                    type: string
+                  moviesPath:
+                    default: /data/movies
+                    description: Path inside the NFS share where movies are stored. Defaults to "/data/movies".
+                    type: string
+                  musicPath:
+                    default: /data/music
+                    description: Path inside the NFS share where music is stored. Defaults to "/data/music".
+                    type: string
+                  storageClass:
+                    description: Storage class for the NFS server PVC. If omitted, uses the cluster default.
+                    nullable: true
+                    type: string
+                  storageSize:
+                    default: 1Ti
+                    description: Size of the PVC backing the in-cluster NFS server. Defaults to "1Ti".
+                    type: string
+                  tv4kPath:
+                    default: /data/tv-4k
+                    description: |-
+                      Path inside the NFS share for 4K TV shows (used when split4k is enabled).
+                      Defaults to "/data/tv-4k".
+                    type: string
+                  tvPath:
+                    default: /data/tv
+                    description: Path inside the NFS share where TV shows are stored. Defaults to "/data/tv".
+                    type: string
+                type: object
             required:
             - apps
             type: object

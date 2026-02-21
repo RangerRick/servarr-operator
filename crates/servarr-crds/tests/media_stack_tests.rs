@@ -314,6 +314,7 @@ fn test_to_servarr_spec_with_overrides() {
 #[test]
 fn test_media_stack_serde_roundtrip() {
     let spec = MediaStackSpec {
+        nfs: None,
         defaults: Some(StackDefaults {
             uid: Some(568),
             gid: Some(568),
@@ -525,7 +526,7 @@ fn test_merge_pod_annotations() {
 #[test]
 fn test_expand_no_split4k_produces_one_entry() {
     let app = minimal_stack_app(AppType::Sonarr);
-    let result = app.expand("media", None).unwrap();
+    let result = app.expand("media", "default", None, None).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].0, "media-sonarr");
     assert!(result[0].1.instance.is_none());
@@ -535,7 +536,7 @@ fn test_expand_no_split4k_produces_one_entry() {
 fn test_expand_split4k_false_produces_one_entry() {
     let mut app = minimal_stack_app(AppType::Sonarr);
     app.split4k = Some(false);
-    let result = app.expand("media", None).unwrap();
+    let result = app.expand("media", "default", None, None).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].0, "media-sonarr");
 }
@@ -545,7 +546,7 @@ fn test_expand_split4k_true_produces_two_entries() {
     let mut app = minimal_stack_app(AppType::Sonarr);
     app.split4k = Some(true);
 
-    let result = app.expand("media", None).unwrap();
+    let result = app.expand("media", "default", None, None).unwrap();
     assert_eq!(result.len(), 2);
 
     // Base instance
@@ -562,7 +563,7 @@ fn test_expand_split4k_radarr() {
     let mut app = minimal_stack_app(AppType::Radarr);
     app.split4k = Some(true);
 
-    let result = app.expand("stack", None).unwrap();
+    let result = app.expand("stack", "default", None, None).unwrap();
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].0, "stack-radarr");
     assert_eq!(result[1].0, "stack-radarr-4k");
@@ -574,7 +575,7 @@ fn test_expand_split4k_invalid_app_type() {
     let mut app = minimal_stack_app(AppType::Prowlarr);
     app.split4k = Some(true);
 
-    let result = app.expand("media", None);
+    let result = app.expand("media", "default", None, None);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("prowlarr"));
 }
@@ -584,7 +585,7 @@ fn test_expand_split4k_invalid_overseerr() {
     let mut app = minimal_stack_app(AppType::Overseerr);
     app.split4k = Some(true);
 
-    let result = app.expand("media", None);
+    let result = app.expand("media", "default", None, None);
     assert!(result.is_err());
 }
 
@@ -604,7 +605,7 @@ fn test_expand_split4k_overrides_env() {
         ..Default::default()
     });
 
-    let result = app.expand("media", None).unwrap();
+    let result = app.expand("media", "default", None, None).unwrap();
     assert_eq!(result.len(), 2);
 
     // Base should have only TZ
@@ -635,7 +636,7 @@ fn test_expand_split4k_overrides_resources() {
         ..Default::default()
     });
 
-    let result = app.expand("media", None).unwrap();
+    let result = app.expand("media", "default", None, None).unwrap();
 
     // Base has no resources
     assert!(result[0].1.resources.is_none());
@@ -668,11 +669,190 @@ fn test_expand_with_stack_defaults() {
     let mut app = minimal_stack_app(AppType::Sonarr);
     app.split4k = Some(true);
 
-    let result = app.expand("media", Some(&defaults)).unwrap();
+    let result = app.expand("media", "default", Some(&defaults), None).unwrap();
     assert_eq!(result.len(), 2);
 
     // Both instances inherit defaults
     assert_eq!(result[0].1.uid, Some(1000));
     assert_eq!(result[1].1.uid, Some(1000));
     assert_eq!(result[1].1.instance.as_deref(), Some("4k"));
+}
+
+// ---------------------------------------------------------------------------
+// NfsServerSpec — defaults, methods, and serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nfs_server_spec_defaults() {
+    let nfs = NfsServerSpec::default();
+    assert!(nfs.enabled);
+    assert_eq!(nfs.storage_size, "1Ti");
+    assert!(nfs.storage_class.is_none());
+    assert!(nfs.image.is_none());
+    assert_eq!(nfs.movies_path, "/movies");
+    assert_eq!(nfs.tv_path, "/tv");
+    assert_eq!(nfs.music_path, "/music");
+    assert_eq!(nfs.movies_4k_path, "/movies-4k");
+    assert_eq!(nfs.tv_4k_path, "/tv-4k");
+    assert!(nfs.external_server.is_none());
+    assert_eq!(nfs.external_path, "/");
+}
+
+#[test]
+fn test_nfs_server_spec_deploy_in_cluster_default() {
+    let nfs = NfsServerSpec::default();
+    assert!(nfs.deploy_in_cluster());
+}
+
+#[test]
+fn test_nfs_server_spec_deploy_in_cluster_disabled() {
+    let nfs = NfsServerSpec {
+        enabled: false,
+        ..Default::default()
+    };
+    assert!(!nfs.deploy_in_cluster());
+}
+
+#[test]
+fn test_nfs_server_spec_deploy_in_cluster_external_server_overrides_enabled() {
+    let nfs = NfsServerSpec {
+        enabled: true,
+        external_server: Some("192.168.1.10".to_string()),
+        ..Default::default()
+    };
+    assert!(!nfs.deploy_in_cluster());
+}
+
+#[test]
+fn test_nfs_server_spec_server_address_in_cluster() {
+    let nfs = NfsServerSpec::default();
+    assert_eq!(
+        nfs.server_address("my-stack", "media"),
+        Some("my-stack-nfs-server.media.svc.cluster.local".to_string())
+    );
+}
+
+#[test]
+fn test_nfs_server_spec_server_address_external() {
+    let nfs = NfsServerSpec {
+        external_server: Some("nas.home.arpa".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        nfs.server_address("my-stack", "media"),
+        Some("nas.home.arpa".to_string())
+    );
+}
+
+#[test]
+fn test_nfs_server_spec_server_address_disabled() {
+    let nfs = NfsServerSpec {
+        enabled: false,
+        ..Default::default()
+    };
+    assert_eq!(nfs.server_address("my-stack", "media"), None);
+}
+
+#[test]
+fn test_nfs_server_spec_nfs_path_in_cluster() {
+    // In-cluster server: paths are prefixed with the NFS export root (/nfsshare).
+    let nfs = NfsServerSpec::default();
+    assert_eq!(nfs.nfs_path("/movies"), "/nfsshare/movies");
+    assert_eq!(nfs.nfs_path("/tv"), "/nfsshare/tv");
+}
+
+#[test]
+fn test_nfs_server_spec_nfs_path_external_root() {
+    let nfs = NfsServerSpec {
+        external_server: Some("nas.home.arpa".to_string()),
+        external_path: "/volume1".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(nfs.nfs_path("/data/movies"), "/volume1/data/movies");
+    assert_eq!(nfs.nfs_path("/data/tv"), "/volume1/data/tv");
+}
+
+#[test]
+fn test_nfs_server_spec_nfs_path_external_root_slash() {
+    // External server with root-slash external_path is a pass-through.
+    let nfs = NfsServerSpec {
+        external_server: Some("nas.home.arpa".to_string()),
+        external_path: "/".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(nfs.nfs_path("/data/movies"), "/data/movies");
+}
+
+#[test]
+fn test_nfs_server_spec_custom_paths() {
+    let nfs = NfsServerSpec {
+        movies_path: "/media/films".to_string(),
+        tv_path: "/media/series".to_string(),
+        music_path: "/media/audio".to_string(),
+        movies_4k_path: "/media/films-uhd".to_string(),
+        tv_4k_path: "/media/series-uhd".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(nfs.movies_path, "/media/films");
+    assert_eq!(nfs.tv_path, "/media/series");
+    assert_eq!(nfs.music_path, "/media/audio");
+    assert_eq!(nfs.movies_4k_path, "/media/films-uhd");
+    assert_eq!(nfs.tv_4k_path, "/media/series-uhd");
+}
+
+#[test]
+fn test_nfs_server_spec_serde_roundtrip() {
+    let nfs = NfsServerSpec {
+        enabled: true,
+        storage_size: "2Ti".to_string(),
+        storage_class: Some("fast-ssd".to_string()),
+        image: None,
+        movies_path: "/media/movies".to_string(),
+        tv_path: "/media/tv".to_string(),
+        music_path: "/media/music".to_string(),
+        movies_4k_path: "/media/movies-4k".to_string(),
+        tv_4k_path: "/media/tv-4k".to_string(),
+        external_server: None,
+        external_path: "/".to_string(),
+    };
+    let json = serde_json::to_string(&nfs).unwrap();
+    let decoded: NfsServerSpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.storage_size, "2Ti");
+    assert_eq!(decoded.storage_class.as_deref(), Some("fast-ssd"));
+    assert_eq!(decoded.movies_path, "/media/movies");
+}
+
+#[test]
+fn test_nfs_server_spec_serde_external() {
+    let nfs = NfsServerSpec {
+        enabled: false,
+        external_server: Some("192.168.1.50".to_string()),
+        external_path: "/mnt/data".to_string(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&nfs).unwrap();
+    let decoded: NfsServerSpec = serde_json::from_str(&json).unwrap();
+    assert!(!decoded.enabled);
+    assert_eq!(decoded.external_server.as_deref(), Some("192.168.1.50"));
+    assert_eq!(decoded.external_path, "/mnt/data");
+}
+
+#[test]
+fn test_media_stack_spec_nfs_defaults_to_none() {
+    let json = r#"{"apps": [{"app": "Sonarr"}]}"#;
+    let spec: MediaStackSpec = serde_json::from_str(json).unwrap();
+    assert!(spec.nfs.is_none());
+}
+
+#[test]
+fn test_media_stack_spec_nfs_field_round_trips() {
+    let json = r#"{
+        "nfs": { "storageSize": "500Gi", "storageClass": "nfs-fast" },
+        "apps": [{"app": "Sonarr"}]
+    }"#;
+    let spec: MediaStackSpec = serde_json::from_str(json).unwrap();
+    let nfs = spec.nfs.unwrap();
+    assert!(nfs.enabled);
+    assert_eq!(nfs.storage_size, "500Gi");
+    assert_eq!(nfs.storage_class.as_deref(), Some("nfs-fast"));
 }

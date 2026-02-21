@@ -28,6 +28,13 @@ use super::types::*;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MediaStackSpec {
+    /// In-cluster NFS server configuration. When omitted or `enabled: true`, the
+    /// operator deploys an NFS server and auto-injects media mounts into every app.
+    /// Set `enabled: false` to opt out entirely, or set `externalServer` to use
+    /// your own NFS.
+    #[serde(default)]
+    pub nfs: Option<NfsServerSpec>,
+
     /// Shared defaults applied to every app in the stack. Per-app fields
     /// override these values.
     #[serde(default)]
