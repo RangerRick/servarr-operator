@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures::StreamExt;
-use kube::api::{Api, ListParams, Patch, PatchParams};
+use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::core::v1::Service;
+use kube::api::{Api, DeleteParams, ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher;
 use kube::{Client, CustomResourceExt, Resource, ResourceExt};
@@ -82,10 +84,13 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
 
     let defaults = stack.spec.defaults.as_ref();
 
+    // Reconcile in-cluster NFS server StatefulSet and Service
+    reconcile_nfs_server(&stack, client, &name, &ns, &pp).await?;
+
     // Collect enabled apps and expand split4k entries
     let mut expanded: Vec<(String, ServarrAppSpec, AppType, u8)> = Vec::new();
     for app in stack.spec.apps.iter().filter(|a| a.enabled) {
-        match app.expand(&name, defaults) {
+        match app.expand(&name, &ns, defaults, stack.spec.nfs.as_ref()) {
             Ok(pairs) => {
                 for (child_name, spec) in pairs {
                     let tier = app.app.tier();
@@ -357,6 +362,87 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
     };
 
     Ok(Action::requeue(requeue))
+}
+
+/// Apply (or clean up) the in-cluster NFS server StatefulSet and Service.
+///
+/// When `nfs.deploy_in_cluster()` is true, both resources are created/updated
+/// via server-side apply. When NFS is absent or external, any previously-created
+/// in-cluster resources are deleted so they don't linger.
+async fn reconcile_nfs_server(
+    stack: &MediaStack,
+    client: &Client,
+    name: &str,
+    ns: &str,
+    pp: &PatchParams,
+) -> Result<(), Error> {
+    let nfs_name = format!("{name}-nfs-server");
+    let ss_api = Api::<StatefulSet>::namespaced(client.clone(), ns);
+    let svc_api = Api::<Service>::namespaced(client.clone(), ns);
+
+    let deploy = stack
+        .spec
+        .nfs
+        .as_ref()
+        .is_some_and(|n| n.deploy_in_cluster());
+
+    if deploy {
+        let nfs = stack.spec.nfs.as_ref().expect("checked above");
+        let owner_ref = stack
+            .controller_owner_ref(&())
+            .expect("stack should have UID");
+
+        let statefulset =
+            servarr_resources::nfs_server::build_statefulset(name, ns, nfs, owner_ref.clone());
+        let service = servarr_resources::nfs_server::build_service(name, ns, owner_ref);
+
+        ss_api
+            .patch(
+                &nfs_name,
+                pp,
+                &Patch::Apply(
+                    serde_json::to_value(&statefulset).map_err(Error::Serialization)?,
+                ),
+            )
+            .await
+            .map_err(Error::Kube)?;
+
+        svc_api
+            .patch(
+                &nfs_name,
+                pp,
+                &Patch::Apply(serde_json::to_value(&service).map_err(Error::Serialization)?),
+            )
+            .await
+            .map_err(Error::Kube)?;
+
+        info!(%name, %ns, "applied NFS server StatefulSet and Service");
+    } else {
+        // NFS disabled or external — remove any in-cluster resources.
+        for result in [
+            ss_api
+                .delete(&nfs_name, &DeleteParams::default())
+                .await
+                .map(|_| ()),
+            svc_api
+                .delete(&nfs_name, &DeleteParams::default())
+                .await
+                .map(|_| ()),
+        ] {
+            match result {
+                Err(e) if !is_not_found(&e) => {
+                    warn!(%name, error = %e, "failed to delete NFS server resource");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_not_found(e: &kube::Error) -> bool {
+    matches!(e, kube::Error::Api(e) if e.code == 404)
 }
 
 async fn patch_status(
