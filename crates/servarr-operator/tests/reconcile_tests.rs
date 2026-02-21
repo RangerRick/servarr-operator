@@ -11,7 +11,9 @@ use kube::config::{
 use kube::runtime::controller::Action;
 use kube::runtime::events::Reporter;
 use serde_json::json;
-use servarr_crds::{AppType, MediaStack, MediaStackSpec, ServarrApp, ServarrAppSpec, StackApp};
+use servarr_crds::{
+    AppType, MediaStack, MediaStackSpec, NfsServerSpec, ServarrApp, ServarrAppSpec, StackApp,
+};
 use servarr_operator::context::Context;
 use tokio::time::Duration;
 use wiremock::matchers::{method, path, path_regex};
@@ -2223,4 +2225,256 @@ async fn test_gateway_tcp_route_type() {
         "tcp route reconcile should succeed, got: {result:?}"
     );
     assert_eq!(result.unwrap(), Action::requeue(Duration::from_secs(300)));
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for NFS reconcile tests
+// ---------------------------------------------------------------------------
+
+fn make_nfs_stack(name: &str, ns: &str, nfs: Option<NfsServerSpec>) -> MediaStack {
+    let spec = MediaStackSpec {
+        defaults: None,
+        apps: vec![StackApp {
+            app: AppType::Sonarr,
+            instance: None,
+            enabled: true,
+            image: None,
+            uid: None,
+            gid: None,
+            security: None,
+            service: None,
+            gateway: None,
+            resources: None,
+            persistence: None,
+            env: Vec::new(),
+            probes: None,
+            scheduling: None,
+            network_policy: None,
+            network_policy_config: None,
+            app_config: None,
+            api_key_secret: None,
+            api_health_check: None,
+            backup: None,
+            image_pull_secrets: None,
+            pod_annotations: None,
+            gpu: None,
+            prowlarr_sync: None,
+            overseerr_sync: None,
+            split4k: None,
+            split4k_overrides: None,
+        }],
+        nfs,
+    };
+    let mut stack = MediaStack::new(name, spec);
+    stack.metadata.namespace = Some(ns.into());
+    stack.metadata.uid = Some("nfs-stack-uid".into());
+    stack.metadata.resource_version = Some("1".into());
+    stack.metadata.generation = Some(1);
+    stack
+}
+
+fn statefulset_response(name: &str, ns: &str) -> serde_json::Value {
+    json!({
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": name,
+            "namespace": ns,
+            "uid": "ss-uid-1",
+            "resourceVersion": "500"
+        },
+        "spec": {
+            "selector": { "matchLabels": {} },
+            "serviceName": name,
+            "template": { "spec": { "containers": [] } }
+        }
+    })
+}
+
+/// Mount common MediaStack child-app mocks (ServarrApp PATCH/GET, list, status).
+async fn mount_child_app_mocks(mock_server: &MockServer, stack_name: &str, ns: &str) {
+    let pattern = format!("/apis/servarr.dev/v1alpha1/namespaces/{ns}/servarrapps/{stack_name}-.*");
+    Mock::given(method("PATCH"))
+        .and(path_regex(pattern.as_str()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(servarrapp_response(&format!("{stack_name}-sonarr"), ns)),
+        )
+        .named("patch-child-sa")
+        .mount(mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(pattern.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json({
+            let mut r = servarrapp_response(&format!("{stack_name}-sonarr"), ns);
+            r["status"] = json!({"ready": true, "readyReplicas": 1, "observedGeneration": 1, "conditions": []});
+            r
+        }))
+        .named("get-child-sa")
+        .mount(mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/apis/servarr.dev/v1alpha1/namespaces/{ns}/servarrapps"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(empty_list("servarr.dev/v1alpha1", "ServarrAppList")),
+        )
+        .named("list-sa")
+        .mount(mock_server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!(
+            "/apis/servarr.dev/v1alpha1/namespaces/{ns}/mediastacks/{stack_name}/status"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(mediastack_response(stack_name, ns)),
+        )
+        .named("patch-stack-status")
+        .mount(mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/apis/servarr.dev/v1alpha1/namespaces/{ns}/mediastacks"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(empty_list("servarr.dev/v1alpha1", "MediaStackList")),
+        )
+        .named("list-mediastacks")
+        .mount(mock_server)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// NFS reconcile: in-cluster NFS creates StatefulSet and Service
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_media_stack_nfs_in_cluster_creates_statefulset_and_service() {
+    let mock_server = MockServer::start().await;
+    let client = mock_client(&mock_server.uri()).await;
+    let ctx = test_context(client);
+
+    let stack = Arc::new(make_nfs_stack("nfs-test", "test", Some(NfsServerSpec::default())));
+
+    // Expect PATCH for NFS StatefulSet
+    Mock::given(method("PATCH"))
+        .and(path(
+            "/apis/apps/v1/namespaces/test/statefulsets/nfs-test-nfs-server",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(statefulset_response("nfs-test-nfs-server", "test")),
+        )
+        .named("patch-nfs-statefulset")
+        .mount(&mock_server)
+        .await;
+
+    // Expect PATCH for NFS Service
+    Mock::given(method("PATCH"))
+        .and(path("/api/v1/namespaces/test/services/nfs-test-nfs-server"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(service_response("nfs-test-nfs-server", "test")),
+        )
+        .named("patch-nfs-service")
+        .mount(&mock_server)
+        .await;
+
+    mount_child_app_mocks(&mock_server, "nfs-test", "test").await;
+
+    let result = servarr_operator::media_stack_controller::reconcile(stack, ctx).await;
+    assert!(
+        result.is_ok(),
+        "NFS in-cluster reconcile should succeed, got: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NFS reconcile: disabled NFS does NOT create StatefulSet or Service
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_media_stack_nfs_disabled_does_not_create_resources() {
+    let mock_server = MockServer::start().await;
+    let client = mock_client(&mock_server.uri()).await;
+    let ctx = test_context(client);
+
+    let nfs = NfsServerSpec {
+        enabled: false,
+        ..Default::default()
+    };
+    let stack = Arc::new(make_nfs_stack("nfs-disabled", "test", Some(nfs)));
+
+    // Must NOT patch StatefulSet
+    let _ss_mock = Mock::given(method("PATCH"))
+        .and(path(
+            "/apis/apps/v1/namespaces/test/statefulsets/nfs-disabled-nfs-server",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .named("no-nfs-statefulset")
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    // Must NOT patch Service
+    let _svc_mock = Mock::given(method("PATCH"))
+        .and(path(
+            "/api/v1/namespaces/test/services/nfs-disabled-nfs-server",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .named("no-nfs-service")
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    mount_child_app_mocks(&mock_server, "nfs-disabled", "test").await;
+
+    let result = servarr_operator::media_stack_controller::reconcile(stack, ctx).await;
+    assert!(
+        result.is_ok(),
+        "disabled NFS reconcile should succeed, got: {result:?}"
+    );
+    // _ss_mock and _svc_mock drop will verify expect(0)
+}
+
+// ---------------------------------------------------------------------------
+// NFS reconcile: external NFS server does NOT create in-cluster resources
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_media_stack_nfs_external_does_not_create_in_cluster_resources() {
+    let mock_server = MockServer::start().await;
+    let client = mock_client(&mock_server.uri()).await;
+    let ctx = test_context(client);
+
+    let nfs = NfsServerSpec {
+        external_server: Some("nas.home.arpa".to_string()),
+        external_path: "/volume1".to_string(),
+        ..Default::default()
+    };
+    let stack = Arc::new(make_nfs_stack("nfs-external", "test", Some(nfs)));
+
+    // Must NOT patch in-cluster StatefulSet
+    let _ss_mock = Mock::given(method("PATCH"))
+        .and(path(
+            "/apis/apps/v1/namespaces/test/statefulsets/nfs-external-nfs-server",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .named("no-nfs-statefulset")
+        .mount_as_scoped(&mock_server)
+        .await;
+
+    mount_child_app_mocks(&mock_server, "nfs-external", "test").await;
+
+    let result = servarr_operator::media_stack_controller::reconcile(stack, ctx).await;
+    assert!(
+        result.is_ok(),
+        "external NFS reconcile should succeed, got: {result:?}"
+    );
+    // _ss_mock drop verifies expect(0)
 }
