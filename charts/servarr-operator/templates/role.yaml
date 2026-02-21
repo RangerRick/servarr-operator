@@ -20,6 +20,10 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "patch"]
+  # StatefulSets: NFS server SSA create/patch + delete on cleanup
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   # Services: owns() watch + SSA create/patch
   - apiGroups: [""]
     resources: ["services"]

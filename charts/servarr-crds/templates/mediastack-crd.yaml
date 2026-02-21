@@ -1395,18 +1395,18 @@ spec:
                     - repository
                     type: object
                   movies4kPath:
-                    default: /data/movies-4k
+                    default: /movies-4k
                     description: |-
                       Path inside the NFS share for 4K movies (used when split4k is enabled).
-                      Defaults to "/data/movies-4k".
+                      Defaults to "/movies-4k".
                     type: string
                   moviesPath:
-                    default: /data/movies
-                    description: Path inside the NFS share where movies are stored. Defaults to "/data/movies".
+                    default: /movies
+                    description: Path inside the NFS share where movies are stored. Defaults to "/movies".
                     type: string
                   musicPath:
-                    default: /data/music
-                    description: Path inside the NFS share where music is stored. Defaults to "/data/music".
+                    default: /music
+                    description: Path inside the NFS share where music is stored. Defaults to "/music".
                     type: string
                   storageClass:
                     description: Storage class for the NFS server PVC. If omitted, uses the cluster default.
@@ -1417,14 +1417,14 @@ spec:
                     description: Size of the PVC backing the in-cluster NFS server. Defaults to "1Ti".
                     type: string
                   tv4kPath:
-                    default: /data/tv-4k
+                    default: /tv-4k
                     description: |-
                       Path inside the NFS share for 4K TV shows (used when split4k is enabled).
-                      Defaults to "/data/tv-4k".
+                      Defaults to "/tv-4k".
                     type: string
                   tvPath:
-                    default: /data/tv
-                    description: Path inside the NFS share where TV shows are stored. Defaults to "/data/tv".
+                    default: /tv
+                    description: Path inside the NFS share where TV shows are stored. Defaults to "/tv".
                     type: string
                 type: object
             required:
