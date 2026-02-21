@@ -2581,3 +2581,152 @@ fn test_deployment_ssh_bastion_host_keys_preserved_with_nfs_mounts() {
         "generate-host-keys init container must be present"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NFS server resource builders
+// ---------------------------------------------------------------------------
+
+fn make_owner_ref() -> k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+    k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+        api_version: "servarr.dev/v1alpha1".to_string(),
+        kind: "MediaStack".to_string(),
+        name: "mystack".to_string(),
+        uid: "stack-uid-1".to_string(),
+        controller: Some(true),
+        block_owner_deletion: Some(true),
+    }
+}
+
+#[test]
+fn test_nfs_server_statefulset_name_and_namespace() {
+    let nfs = NfsServerSpec::default();
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    assert_eq!(ss.metadata.name.as_deref(), Some("mystack-nfs-server"));
+    assert_eq!(ss.metadata.namespace.as_deref(), Some("media"));
+}
+
+#[test]
+fn test_nfs_server_statefulset_replicas_and_service_name() {
+    let nfs = NfsServerSpec::default();
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    let spec = ss.spec.unwrap();
+    assert_eq!(spec.replicas, Some(1));
+    assert_eq!(spec.service_name.as_deref(), Some("mystack-nfs-server"));
+}
+
+#[test]
+fn test_nfs_server_statefulset_port_2049() {
+    let nfs = NfsServerSpec::default();
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    let spec = ss.spec.unwrap();
+    let pod_spec = spec.template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let ports = container.ports.as_ref().unwrap();
+    assert!(
+        ports.iter().any(|p| p.container_port == 2049),
+        "NFS server must expose port 2049"
+    );
+}
+
+#[test]
+fn test_nfs_server_statefulset_export_dir_mount() {
+    let nfs = NfsServerSpec::default();
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    let spec = ss.spec.unwrap();
+    let pod_spec = spec.template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let mounts = container.volume_mounts.as_ref().unwrap();
+    assert!(
+        mounts.iter().any(|m| m.mount_path == "/nfsshare"),
+        "data volume must be mounted at /nfsshare"
+    );
+}
+
+#[test]
+fn test_nfs_server_statefulset_volume_claim_template_storage_size() {
+    let nfs = NfsServerSpec {
+        storage_size: "500Gi".to_string(),
+        storage_class: Some("fast-ssd".to_string()),
+        ..Default::default()
+    };
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    let spec = ss.spec.unwrap();
+    let vclaim = &spec.volume_claim_templates.unwrap()[0];
+    let pvc_spec = vclaim.spec.as_ref().unwrap();
+    assert_eq!(
+        pvc_spec.storage_class_name.as_deref(),
+        Some("fast-ssd")
+    );
+    let storage = pvc_spec
+        .resources
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap()
+        .get("storage")
+        .unwrap();
+    assert_eq!(storage.0, "500Gi");
+}
+
+#[test]
+fn test_nfs_server_statefulset_custom_image() {
+    let nfs = NfsServerSpec {
+        image: Some(ImageSpec {
+            repository: "my-registry/nfs-server".to_string(),
+            tag: "v2".to_string(),
+            digest: String::new(),
+            pull_policy: "IfNotPresent".to_string(),
+        }),
+        ..Default::default()
+    };
+    let ss = servarr_resources::nfs_server::build_statefulset(
+        "mystack", "media", &nfs, make_owner_ref(),
+    );
+    let spec = ss.spec.unwrap();
+    let container = &spec.template.spec.unwrap().containers[0];
+    assert_eq!(
+        container.image.as_deref(),
+        Some("my-registry/nfs-server:v2")
+    );
+}
+
+#[test]
+fn test_nfs_server_service_name_and_namespace() {
+    let svc = servarr_resources::nfs_server::build_service("mystack", "media", make_owner_ref());
+    assert_eq!(svc.metadata.name.as_deref(), Some("mystack-nfs-server"));
+    assert_eq!(svc.metadata.namespace.as_deref(), Some("media"));
+}
+
+#[test]
+fn test_nfs_server_service_port_2049() {
+    let svc = servarr_resources::nfs_server::build_service("mystack", "media", make_owner_ref());
+    let spec = svc.spec.unwrap();
+    assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
+    let ports = spec.ports.unwrap();
+    assert!(
+        ports.iter().any(|p| p.port == 2049),
+        "NFS service must expose port 2049"
+    );
+}
+
+#[test]
+fn test_nfs_server_service_selector_labels() {
+    let svc = servarr_resources::nfs_server::build_service("mystack", "media", make_owner_ref());
+    let selector = svc.spec.unwrap().selector.unwrap();
+    assert_eq!(selector.get("servarr.dev/stack").map(|s| s.as_str()), Some("mystack"));
+    assert_eq!(
+        selector.get("servarr.dev/component").map(|s| s.as_str()),
+        Some("nfs-server")
+    );
+}
