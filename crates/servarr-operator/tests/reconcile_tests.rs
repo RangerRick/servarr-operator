@@ -119,6 +119,7 @@ fn make_media_stack(name: &str, ns: &str) -> MediaStack {
             split4k: None,
             split4k_overrides: None,
         }],
+        nfs: None,
     };
     let mut stack = MediaStack::new(name, spec);
     stack.metadata.namespace = Some(ns.into());
@@ -878,6 +879,7 @@ fn make_multi_app_stack(name: &str, ns: &str) -> MediaStack {
                 split4k_overrides: None,
             },
         ],
+        nfs: None,
     };
     let mut stack = MediaStack::new(name, spec);
     stack.metadata.namespace = Some(ns.into());
@@ -1059,6 +1061,7 @@ async fn test_media_stack_reconcile_disabled_app() {
                 split4k_overrides: None,
             },
         ],
+        nfs: None,
     };
     let mut stack = MediaStack::new("disabled-test", spec);
     stack.metadata.namespace = Some("test".into());

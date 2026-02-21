@@ -837,6 +837,218 @@ fn test_nfs_server_spec_serde_external() {
     assert_eq!(decoded.external_path, "/mnt/data");
 }
 
+// ---------------------------------------------------------------------------
+// NFS mount injection via StackApp::expand
+// ---------------------------------------------------------------------------
+
+fn nfs_in_cluster() -> NfsServerSpec {
+    NfsServerSpec::default()
+}
+
+fn nfs_external() -> NfsServerSpec {
+    NfsServerSpec {
+        external_server: Some("nas.home.arpa".to_string()),
+        external_path: "/volume1".to_string(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_nfs_inject_sonarr_gets_tv_mount() {
+    let app = minimal_stack_app(AppType::Sonarr);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].name, "tv");
+    assert_eq!(mounts[0].server, "mystack-nfs-server.media.svc.cluster.local");
+    assert_eq!(mounts[0].path, "/nfsshare/tv");
+    assert_eq!(mounts[0].mount_path, "/tv");
+}
+
+#[test]
+fn test_nfs_inject_radarr_gets_movies_mount() {
+    let app = minimal_stack_app(AppType::Radarr);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].name, "movies");
+    assert_eq!(mounts[0].path, "/nfsshare/movies");
+    assert_eq!(mounts[0].mount_path, "/movies");
+}
+
+#[test]
+fn test_nfs_inject_lidarr_gets_music_mount() {
+    let app = minimal_stack_app(AppType::Lidarr);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].name, "music");
+    assert_eq!(mounts[0].path, "/nfsshare/music");
+    assert_eq!(mounts[0].mount_path, "/music");
+}
+
+#[test]
+fn test_nfs_inject_transmission_gets_all_mounts() {
+    let app = minimal_stack_app(AppType::Transmission);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    let names: Vec<&str> = mounts.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"movies"), "expected movies mount");
+    assert!(names.contains(&"tv"), "expected tv mount");
+    assert!(names.contains(&"music"), "expected music mount");
+    assert!(names.contains(&"movies-4k"), "expected movies-4k mount");
+    assert!(names.contains(&"tv-4k"), "expected tv-4k mount");
+    assert_eq!(mounts.len(), 5);
+}
+
+#[test]
+fn test_nfs_inject_sabnzbd_gets_all_mounts() {
+    let app = minimal_stack_app(AppType::Sabnzbd);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts.len(), 5, "sabnzbd should get all five media mounts");
+}
+
+#[test]
+fn test_nfs_inject_user_mounts_preserved_by_name() {
+    // A user-defined NFS mount with the same name takes precedence.
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.persistence = Some(PersistenceSpec {
+        volumes: Vec::new(),
+        nfs_mounts: vec![NfsMount {
+            name: "tv".to_string(),
+            server: "my-custom-server".to_string(),
+            path: "/custom/tv".to_string(),
+            mount_path: "/tv".to_string(),
+            read_only: true,
+        }],
+    });
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].server, "my-custom-server", "user mount should win");
+    assert_eq!(mounts[0].path, "/custom/tv");
+    assert!(mounts[0].read_only);
+}
+
+#[test]
+fn test_nfs_inject_external_server_address() {
+    let app = minimal_stack_app(AppType::Radarr);
+    let nfs = nfs_external();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(mounts[0].server, "nas.home.arpa");
+    assert_eq!(mounts[0].path, "/volume1/movies");
+}
+
+#[test]
+fn test_nfs_inject_disabled_produces_no_mounts() {
+    let app = minimal_stack_app(AppType::Sonarr);
+    let nfs = NfsServerSpec {
+        enabled: false,
+        ..Default::default()
+    };
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    assert!(
+        spec.persistence.is_none()
+            || spec.persistence.as_ref().unwrap().nfs_mounts.is_empty(),
+        "disabled NFS should produce no mounts"
+    );
+}
+
+#[test]
+fn test_nfs_inject_split4k_sonarr_uses_4k_server_path_standard_mount() {
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.split4k = Some(true);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    assert_eq!(result.len(), 2);
+
+    // Standard instance: server path /nfsshare/tv, mounted at /tv
+    let (_, std_spec) = &result[0];
+    let std_mounts = &std_spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(std_mounts[0].path, "/nfsshare/tv");
+    assert_eq!(std_mounts[0].mount_path, "/tv");
+
+    // 4K instance: server path /nfsshare/tv-4k, still mounted at /tv
+    let (_, k4_spec) = &result[1];
+    let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(k4_mounts[0].path, "/nfsshare/tv-4k");
+    assert_eq!(k4_mounts[0].mount_path, "/tv");
+}
+
+#[test]
+fn test_nfs_inject_split4k_radarr_uses_4k_server_path_standard_mount() {
+    let mut app = minimal_stack_app(AppType::Radarr);
+    app.split4k = Some(true);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    assert_eq!(result.len(), 2);
+
+    let (_, k4_spec) = &result[1];
+    let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(k4_mounts[0].path, "/nfsshare/movies-4k");
+    assert_eq!(k4_mounts[0].mount_path, "/movies");
+}
+
+#[test]
+fn test_nfs_inject_split4k_custom_4k_paths() {
+    // Custom tv_4k_path and movies_4k_path must be used for 4K instances.
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.split4k = Some(true);
+    let nfs = NfsServerSpec {
+        tv_4k_path: "/custom-tv-4k".to_string(),
+        ..NfsServerSpec::default()
+    };
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, k4_spec) = &result[1];
+    let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
+    assert_eq!(k4_mounts[0].path, "/nfsshare/custom-tv-4k");
+    assert_eq!(k4_mounts[0].mount_path, "/tv");
+}
+
+#[test]
+fn test_nfs_inject_split4k_user_override_via_split4k_overrides() {
+    // A user-defined NFS mount in split4k_overrides.persistence takes precedence
+    // over the auto-injected 4K mount for the same name.
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.split4k = Some(true);
+    app.split4k_overrides = Some(Split4kOverrides {
+        persistence: Some(PersistenceSpec {
+            volumes: Vec::new(),
+            nfs_mounts: vec![NfsMount {
+                name: "tv".to_string(),
+                server: "custom-override-server".to_string(),
+                path: "/override/tv-4k".to_string(),
+                mount_path: "/tv".to_string(),
+                read_only: false,
+            }],
+        }),
+        ..Default::default()
+    });
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, k4_spec) = &result[1];
+    let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
+    let tv_mount = k4_mounts.iter().find(|m| m.name == "tv").unwrap();
+    assert_eq!(tv_mount.server, "custom-override-server", "override should win");
+    assert_eq!(tv_mount.path, "/override/tv-4k");
+}
+
 #[test]
 fn test_media_stack_spec_nfs_defaults_to_none() {
     let json = r#"{"apps": [{"app": "Sonarr"}]}"#;
