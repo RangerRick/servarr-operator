@@ -32,6 +32,7 @@ overseerr = "0.1"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
 cron = "0.15"
 url = "2.5.8"
+rand = "0.9"
 
 [dev-dependencies]
 wiremock.workspace = true

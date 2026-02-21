@@ -6,7 +6,7 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Secret, Service};
 use k8s_openapi::api::networking::v1::NetworkPolicy;
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder};
 use kube::runtime::watcher;
@@ -317,6 +317,10 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
             .map_err(Error::Kube)?;
     }
 
+    // Auto-create API key Secret if apiKeySecret is set and the Secret is absent.
+    // Uses a get-then-create pattern so an existing key is never overwritten.
+    ensure_api_key_secret(client, &app, &ns).await?;
+
     // Build and apply SSH bastion authorized-keys Secret
     if let Some(secret) = servarr_resources::secret::build_authorized_keys(&app) {
         let secret_name = secret.metadata.name.as_deref().unwrap_or(&name);
@@ -472,6 +476,46 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         .map_err(Error::Kube)?;
 
     Ok(Action::requeue(Duration::from_secs(300)))
+}
+
+/// Create the API key Secret the first time `apiKeySecret` is reconciled.
+///
+/// A random 32-byte (64-char hex) key is generated and stored as `api-key`
+/// in the Secret.  For .NET-based apps (Sonarr, Radarr, Lidarr, Prowlarr)
+/// the deployment builder injects the value as the `APP__AUTH__APIKEY` env
+/// var so the app uses the operator-managed key from first startup.
+///
+/// The Secret is owned by the ServarrApp so it is garbage-collected when the
+/// ServarrApp is deleted.  An existing Secret is never touched.
+async fn ensure_api_key_secret(client: &Client, app: &ServarrApp, ns: &str) -> Result<(), Error> {
+    let secret_name = match app.spec.api_key_secret.as_deref() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    let secret_api = Api::<Secret>::namespaced(client.clone(), ns);
+
+    // Only create if the Secret does not already exist.
+    if secret_api.get(secret_name).await.is_ok() {
+        return Ok(());
+    }
+
+    use rand::Rng as _;
+    let key: String = rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+
+    if let Some(secret) = servarr_resources::secret::build_api_key(app, &key) {
+        info!(name = %app.name_any(), secret = %secret_name, "creating api-key secret");
+        secret_api
+            .create(&PostParams::default(), &secret)
+            .await
+            .map_err(Error::Kube)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn check_api_health(

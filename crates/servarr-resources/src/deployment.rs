@@ -638,6 +638,36 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
         }
     }
 
+    // .NET *arr app API key from Secret.
+    // Sonarr, Radarr, Lidarr, and Prowlarr all support setting their API key
+    // via the double-underscore ASP.NET Core env var override pattern.  When
+    // apiKeySecret is set the operator creates the Secret (if absent) and
+    // injects the value here so the app uses the operator-managed key from
+    // the moment it first starts.
+    if let Some(ref secret_name) = app.spec.api_key_secret {
+        let apikey_env = match app.spec.app {
+            AppType::Sonarr => Some("SONARR__AUTH__APIKEY"),
+            AppType::Radarr => Some("RADARR__AUTH__APIKEY"),
+            AppType::Lidarr => Some("LIDARR__AUTH__APIKEY"),
+            AppType::Prowlarr => Some("PROWLARR__AUTH__APIKEY"),
+            _ => None,
+        };
+        if let Some(env_name) = apikey_env {
+            env.push(EnvVar {
+                name: env_name.into(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: secret_name.clone(),
+                        key: "api-key".into(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+    }
+
     // Transmission auth from secret
     if let Some(AppConfig::Transmission(ref tc)) = app.spec.app_config
         && let Some(ref auth) = tc.auth
