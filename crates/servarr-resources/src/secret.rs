@@ -5,6 +5,27 @@ use std::collections::BTreeMap;
 
 use crate::common;
 
+/// Build an API key Secret for apps whose `apiKeySecret` field is set.
+///
+/// The caller generates the key (a random hex string) and passes it here.
+/// This function only constructs the `Secret` object — it does not check
+/// whether the Secret already exists; that gate belongs in the controller.
+pub fn build_api_key(app: &ServarrApp, key: &str) -> Option<Secret> {
+    let secret_name = app.spec.api_key_secret.as_deref()?;
+    Some(Secret {
+        metadata: ObjectMeta {
+            name: Some(secret_name.to_owned()),
+            namespace: Some(common::app_namespace(app)),
+            labels: Some(common::labels(app)),
+            owner_references: Some(vec![common::owner_reference(app)]),
+            ..Default::default()
+        },
+        string_data: Some(BTreeMap::from([("api-key".into(), key.to_owned())])),
+        type_: Some("Opaque".into()),
+        ..Default::default()
+    })
+}
+
 /// Build an authorized-keys Secret for SSH bastion apps.
 ///
 /// Each user gets a key in the Secret with their public keys.
