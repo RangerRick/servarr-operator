@@ -93,7 +93,7 @@ pub struct TransmissionAuth {
 }
 
 fn json_object_schema(_gen: &mut SchemaGenerator) -> Schema {
-    json_schema!({ "type": "object" })
+    json_schema!({ "type": "object", "x-kubernetes-preserve-unknown-fields": true })
 }
 
 // --- SSH Bastion ---
