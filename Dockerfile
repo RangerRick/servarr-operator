@@ -18,7 +18,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --bin servarr-operator \
     && cp /build/target/release/servarr-operator /build/servarr-operator
 
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && apt-get clean
 COPY --from=builder /build/servarr-operator /servarr-operator
-USER nonroot:nonroot
+USER nobody:nogroup
 ENTRYPOINT ["/servarr-operator"]
