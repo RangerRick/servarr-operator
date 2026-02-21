@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,34 @@ pub struct PersistenceSpec {
     pub volumes: Vec<PvcVolume>,
     #[serde(default)]
     pub nfs_mounts: Vec<NfsMount>,
+}
+
+impl PersistenceSpec {
+    /// Merge `self` (base layer) with `over` (higher-priority layer).
+    ///
+    /// - PVC volumes: `over.volumes` replaces entirely when non-empty; base
+    ///   volumes are used when `over.volumes` is empty.
+    /// - NFS mounts: additive, deduplicated by name (`over` wins on conflict).
+    pub fn merge_with(&self, over: &PersistenceSpec) -> PersistenceSpec {
+        let volumes = if over.volumes.is_empty() {
+            self.volumes.clone()
+        } else {
+            over.volumes.clone()
+        };
+
+        let mut nfs_map: IndexMap<String, NfsMount> = IndexMap::new();
+        for m in &self.nfs_mounts {
+            nfs_map.insert(m.name.clone(), m.clone());
+        }
+        for m in &over.nfs_mounts {
+            nfs_map.insert(m.name.clone(), m.clone());
+        }
+
+        PersistenceSpec {
+            volumes,
+            nfs_mounts: nfs_map.into_values().collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]

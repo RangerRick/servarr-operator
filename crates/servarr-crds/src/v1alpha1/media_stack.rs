@@ -316,30 +316,7 @@ fn merge_persistence(
         (None, None) => None,
         (None, Some(a)) => Some(a.clone()),
         (Some(d), None) => Some(d.clone()),
-        (Some(d), Some(a)) => {
-            // PVC volumes: per-app replaces entirely if non-empty
-            let volumes = if a.volumes.is_empty() {
-                d.volumes.clone()
-            } else {
-                a.volumes.clone()
-            };
-
-            // NFS mounts: additive, deduplicated by name (per-app wins)
-            use indexmap::IndexMap;
-            let mut nfs_map: IndexMap<String, NfsMount> = IndexMap::new();
-            for m in &d.nfs_mounts {
-                nfs_map.insert(m.name.clone(), m.clone());
-            }
-            for m in &a.nfs_mounts {
-                nfs_map.insert(m.name.clone(), m.clone());
-            }
-            let nfs_mounts: Vec<NfsMount> = nfs_map.into_values().collect();
-
-            Some(PersistenceSpec {
-                volumes,
-                nfs_mounts,
-            })
-        }
+        (Some(d), Some(a)) => Some(d.merge_with(a)),
     }
 }
 
