@@ -449,6 +449,10 @@ pub struct MediaStackStatus {
     pub conditions: Vec<Condition>,
     #[serde(default)]
     pub observed_generation: i64,
+    /// RFC 3339 timestamp of when the current tier first became blocked.
+    /// Reset when the tier advances. Used to enforce the tier rollout timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_blocked_since: Option<String>,
 }
 
 impl MediaStackStatus {
@@ -491,6 +495,10 @@ pub struct StackAppStatus {
     pub name: String,
     pub app_type: String,
     pub tier: u8,
+    /// True when this app's tier was advanced past without the app becoming
+    /// ready (tier rollout timeout elapsed).  Cleared once the app is ready.
+    #[serde(default)]
+    pub bypassed: bool,
     #[serde(default)]
     pub ready: bool,
     #[serde(default)]

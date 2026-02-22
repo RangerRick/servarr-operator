@@ -1439,6 +1439,10 @@ spec:
                   properties:
                     appType:
                       type: string
+                    bypassed:
+                      default: false
+                      description: True when this app's tier was advanced past due to timeout; cleared once the app becomes ready.
+                      type: boolean
                     enabled:
                       default: false
                       type: boolean
@@ -1505,6 +1509,10 @@ spec:
                 default: 0
                 format: int32
                 type: integer
+              tierBlockedSince:
+                description: RFC 3339 timestamp of when the current tier first became blocked. Reset when the tier advances.
+                nullable: true
+                type: string
               totalApps:
                 default: 0
                 format: int32
