@@ -194,10 +194,39 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
         );
     }
 
-    if let Some(scheduling) = &app.spec.scheduling
-        && !scheduling.node_selector.is_empty()
-    {
-        pod_spec.node_selector = Some(scheduling.node_selector.clone());
+    // Merge user-provided nodeSelector with GPU NFD selectors.
+    // GPU selectors match the semantic labels produced by the NodeFeatureRule CRs
+    // (gpu.intel.com/i915, gpu.nvidia.com/present, gpu.amd.com/present).
+    // nodeSelector uses AND semantics: all entries must match on the same node.
+    // This is intentional — requesting multiple GPU types is unusual and would
+    // require a node that has all of them loaded simultaneously.
+    let mut node_selector: std::collections::BTreeMap<String, String> = app
+        .spec
+        .scheduling
+        .as_ref()
+        .map(|s| s.node_selector.clone())
+        .unwrap_or_default();
+
+    if let Some(ref gpu) = app.spec.gpu {
+        if gpu.intel.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.intel.com/i915".into())
+                .or_insert("true".into());
+        }
+        if gpu.nvidia.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.nvidia.com/present".into())
+                .or_insert("true".into());
+        }
+        if gpu.amd.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.amd.com/present".into())
+                .or_insert("true".into());
+        }
+    }
+
+    if !node_selector.is_empty() {
+        pod_spec.node_selector = Some(node_selector);
     }
 
     let strategy = if has_host_port {

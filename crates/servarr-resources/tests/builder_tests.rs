@@ -3054,3 +3054,82 @@ fn test_nfs_server_service_selector_labels() {
         Some("nfs-server")
     );
 }
+
+#[test]
+fn test_deployment_no_gpu_no_node_selector() {
+    let app = make_app(AppType::Sonarr);
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    assert!(
+        pod_spec.node_selector.is_none(),
+        "no GPU spec should produce no nodeSelector"
+    );
+}
+
+#[test]
+fn test_deployment_intel_gpu_adds_nfd_node_selector() {
+    let mut app = make_app(AppType::Jellyfin);
+    app.spec.gpu = Some(servarr_crds::GpuSpec {
+        intel: Some(1),
+        ..Default::default()
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let sel = pod_spec.node_selector.expect("nodeSelector must be set for Intel GPU");
+    assert_eq!(sel.get("gpu.intel.com/i915").map(|s| s.as_str()), Some("true"));
+    assert!(!sel.contains_key("gpu.nvidia.com/present"));
+    assert!(!sel.contains_key("gpu.amd.com/present"));
+}
+
+#[test]
+fn test_deployment_nvidia_gpu_adds_nfd_node_selector() {
+    let mut app = make_app(AppType::Jellyfin);
+    app.spec.gpu = Some(servarr_crds::GpuSpec {
+        nvidia: Some(1),
+        ..Default::default()
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let sel = pod_spec.node_selector.expect("nodeSelector must be set for NVIDIA GPU");
+    assert_eq!(sel.get("gpu.nvidia.com/present").map(|s| s.as_str()), Some("true"));
+    assert!(!sel.contains_key("gpu.intel.com/i915"));
+    assert!(!sel.contains_key("gpu.amd.com/present"));
+}
+
+#[test]
+fn test_deployment_amd_gpu_adds_nfd_node_selector() {
+    let mut app = make_app(AppType::Jellyfin);
+    app.spec.gpu = Some(servarr_crds::GpuSpec {
+        amd: Some(1),
+        ..Default::default()
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let sel = pod_spec.node_selector.expect("nodeSelector must be set for AMD GPU");
+    assert_eq!(sel.get("gpu.amd.com/present").map(|s| s.as_str()), Some("true"));
+    assert!(!sel.contains_key("gpu.intel.com/i915"));
+    assert!(!sel.contains_key("gpu.nvidia.com/present"));
+}
+
+#[test]
+fn test_deployment_user_node_selector_preserved_with_gpu() {
+    let mut app = make_app(AppType::Jellyfin);
+    app.spec.gpu = Some(servarr_crds::GpuSpec {
+        intel: Some(1),
+        ..Default::default()
+    });
+    app.spec.scheduling = Some(servarr_crds::NodeScheduling {
+        node_selector: std::collections::BTreeMap::from([
+            ("kubernetes.io/hostname".into(), "my-node".into()),
+        ]),
+        ..Default::default()
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let sel = pod_spec.node_selector.expect("nodeSelector must be set");
+    assert_eq!(sel.get("gpu.intel.com/i915").map(|s| s.as_str()), Some("true"));
+    assert_eq!(
+        sel.get("kubernetes.io/hostname").map(|s| s.as_str()),
+        Some("my-node")
+    );
+}
