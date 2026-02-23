@@ -40,6 +40,11 @@ tolerations: []
 #             deviceClassWhitelist: ["0300", "0302"]
 nfd:
   enabled: false
+  # gpuRules: when true (and nfd.enabled=true), installs NodeFeatureRule CRs that
+  # translate raw PCI/module NFD labels into semantic GPU labels:
+  #   gpu.intel.com/i915=true, gpu.nvidia.com/present=true, gpu.amd.com/present=true
+  gpuRules:
+    enabled: false
   worker:
     config:
       sources:

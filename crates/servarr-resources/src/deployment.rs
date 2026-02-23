@@ -845,6 +845,18 @@ fn build_security_contexts(
     }
 }
 
+/// Map a shell binary path to its Alpine apk package name.
+/// Returns `None` for the default `/bin/sh` (already present in Alpine) and for
+/// unknown paths (let the user handle those manually).
+fn shell_to_apk_package(shell: Option<&str>) -> Option<&'static str> {
+    match shell {
+        Some("/bin/bash") | Some("/usr/bin/bash") => Some("bash"),
+        Some("/bin/zsh") | Some("/usr/bin/zsh") => Some("zsh"),
+        Some("/bin/fish") | Some("/usr/bin/fish") | Some("/usr/local/bin/fish") => Some("fish"),
+        _ => None,
+    }
+}
+
 fn build_probe(config: &ProbeConfig, svc_spec: &ServiceSpec) -> Probe {
     let first_port = svc_spec
         .ports
@@ -1053,6 +1065,22 @@ fi
 apk add --no-cache rsync >/dev/null 2>&1 || true
 "#,
         );
+    }
+
+    // Collect any non-default shells requested by users and install their packages.
+    let shell_packages: Vec<&str> = ssh_config
+        .users
+        .iter()
+        .filter_map(|u| shell_to_apk_package(u.shell.as_deref()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if !shell_packages.is_empty() {
+        let pkgs = shell_packages.join(" ");
+        patch_script.push_str(&format!(
+            "# Install shells requested by users\napk add --no-cache {pkgs} >/dev/null 2>&1 || true\n"
+        ));
     }
 
     init.push(Container {
