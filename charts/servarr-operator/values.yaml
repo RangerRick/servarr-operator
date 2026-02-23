@@ -40,6 +40,27 @@ tolerations: []
 #             deviceClassWhitelist: ["0300", "0302"]
 nfd:
   enabled: false
+  worker:
+    config:
+      sources:
+        pci:
+          # Detect display controllers (0x03xx) and 3D controllers (0x0302).
+          # deviceLabelFields: [class, vendor] produces labels of the form
+          # feature.node.kubernetes.io/pci-<class>_<vendor>.present
+          deviceClassWhitelist:
+            - "03"
+            - "0302"
+          deviceLabelFields:
+            - class
+            - vendor
+        kernel:
+          # Detect loaded kernel modules for GPU drivers.
+          # Labels: feature.node.kubernetes.io/kernel-loadedmodule.<module>
+          loadedModules:
+            - i915      # Intel Gen 9+ (Skylake–Arrow Lake)
+            - xe        # Intel Gen 12.5+ (Meteor Lake, Lunar Lake)
+            - nvidia    # NVIDIA proprietary
+            - amdgpu    # AMD open-source
 
 # Default container images for managed apps.
 # AUTO-GENERATED from image-defaults.toml — edit that file instead.

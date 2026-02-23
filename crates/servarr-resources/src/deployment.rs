@@ -382,6 +382,16 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
                 ..Default::default()
             });
         }
+        // Shell mode: per-user ~/.ssh PVC for persistent SSH client state
+        if sc.mode == SshMode::Shell {
+            for user in &sc.users {
+                mounts.push(VolumeMount {
+                    name: format!("ssh-home-{}", user.name),
+                    mount_path: format!("/home/{}/.ssh", user.name),
+                    ..Default::default()
+                });
+            }
+        }
     }
 
     mounts
@@ -520,6 +530,19 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
                 }),
                 ..Default::default()
             });
+        }
+        // Shell mode: per-user ~/.ssh PVC volumes
+        if sc.mode == SshMode::Shell {
+            for user in &sc.users {
+                volumes.push(Volume {
+                    name: format!("ssh-home-{}", user.name),
+                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                        claim_name: common::child_name(app, &format!("ssh-home-{}", user.name)),
+                        read_only: None,
+                    }),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -1039,6 +1062,46 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
         security_context: Some(security_context.clone()),
         ..Default::default()
     });
+
+    // Shell mode: set up per-user ~/.ssh directories with correct ownership and permissions.
+    // The PVCs are mounted read-write; this init container initialises them on first boot
+    // and is idempotent on subsequent restarts.
+    if ssh_config.mode == SshMode::Shell && !ssh_config.users.is_empty() {
+        let setup_cmds: String = ssh_config
+            .users
+            .iter()
+            .map(|u| {
+                format!(
+                    "mkdir -p /home/{name}/.ssh\nchown {uid}:{gid} /home/{name}/.ssh\nchmod 700 /home/{name}/.ssh",
+                    name = u.name,
+                    uid = u.uid,
+                    gid = u.gid,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let setup_script = format!("#!/bin/sh\nset -e\n{setup_cmds}\necho 'SSH home dirs ready.'\n");
+
+        let setup_mounts: Vec<VolumeMount> = ssh_config
+            .users
+            .iter()
+            .map(|u| VolumeMount {
+                name: format!("ssh-home-{}", u.name),
+                mount_path: format!("/home/{}/.ssh", u.name),
+                ..Default::default()
+            })
+            .collect();
+
+        init.push(Container {
+            name: "setup-ssh-home".into(),
+            image: Some(image.to_string()),
+            command: Some(vec!["/bin/sh".into(), "-c".into(), setup_script]),
+            security_context: Some(security_context.clone()),
+            volume_mounts: Some(setup_mounts),
+            ..Default::default()
+        });
+    }
 }
 
 /// For Transmission with auth enabled, automatically switch to exec probes

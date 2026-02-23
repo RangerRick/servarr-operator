@@ -2,7 +2,7 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaim, PersistentVolumeClaimSpec, VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use servarr_crds::{AppDefaults, PersistenceSpec, PvcVolume, ServarrApp};
+use servarr_crds::{AppConfig, AppDefaults, PersistenceSpec, PvcVolume, ServarrApp, SshMode};
 use std::collections::BTreeMap;
 
 use crate::common;
@@ -18,11 +18,41 @@ pub fn build_all(app: &ServarrApp) -> Vec<PersistentVolumeClaim> {
         }
     };
 
-    persistence
+    let mut pvcs: Vec<PersistentVolumeClaim> = persistence
         .volumes
         .iter()
         .map(|v| build_one(app, v))
-        .collect()
+        .collect();
+
+    // Shell mode: one read-write PVC per user for persistent ~/.ssh state
+    // (known_hosts, config, identity files).
+    if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
+        if sc.mode == SshMode::Shell {
+            for user in &sc.users {
+                pvcs.push(build_ssh_home_pvc(app, &user.name));
+            }
+        }
+    }
+
+    pvcs
+}
+
+fn build_ssh_home_pvc(app: &ServarrApp, username: &str) -> PersistentVolumeClaim {
+    PersistentVolumeClaim {
+        metadata: common::metadata(app, &format!("ssh-home-{username}")),
+        spec: Some(PersistentVolumeClaimSpec {
+            access_modes: Some(vec!["ReadWriteOnce".into()]),
+            resources: Some(VolumeResourceRequirements {
+                requests: Some(BTreeMap::from([(
+                    "storage".into(),
+                    Quantity("10Mi".into()),
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }
 
 fn build_one(app: &ServarrApp, vol: &PvcVolume) -> PersistentVolumeClaim {

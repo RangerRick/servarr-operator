@@ -208,6 +208,275 @@ fn test_pvc_builder_config_only() {
 }
 
 #[test]
+fn test_pvc_ssh_bastion_shell_mode_creates_home_pvcs() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-pvc".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: String::new() },
+                    SshUser { name: "bob".into(), uid: 1002, gid: 1002, shell: None, public_keys: String::new() },
+                ],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let pvcs = servarr_resources::pvc::build_all(&app);
+
+    // host-keys PVC from app defaults + one per user
+    assert!(pvcs.iter().any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice")));
+    assert!(pvcs.iter().any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-bob")));
+
+    let alice_pvc = pvcs.iter().find(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice")).unwrap();
+    let spec = alice_pvc.spec.as_ref().unwrap();
+    assert_eq!(spec.access_modes.as_deref(), Some(&["ReadWriteOnce".to_string()][..]));
+    let storage = spec.resources.as_ref().unwrap().requests.as_ref().unwrap()["storage"].0.as_str();
+    assert_eq!(storage, "10Mi");
+}
+
+#[test]
+fn test_pvc_ssh_bastion_non_shell_mode_no_home_pvcs() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-pvc2".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Sftp,
+                users: vec![
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: String::new() },
+                ],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let pvcs = servarr_resources::pvc::build_all(&app);
+    assert!(
+        !pvcs.iter().any(|p| p.metadata.name.as_deref().unwrap_or("").contains("ssh-home")),
+        "Non-shell modes must not create ssh-home PVCs"
+    );
+}
+
+#[test]
+fn test_deployment_ssh_bastion_shell_mode_home_mounts() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-shell".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: "ssh-ed25519 AAAA".into() },
+                ],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let mounts = container.volume_mounts.as_ref().unwrap();
+    let volumes = pod_spec.volumes.as_ref().unwrap();
+
+    assert!(
+        mounts.iter().any(|m| m.name == "ssh-home-alice" && m.mount_path == "/home/alice/.ssh"),
+        "Shell mode must mount ssh-home-alice at /home/alice/.ssh"
+    );
+    assert!(
+        volumes.iter().any(|v| v.name == "ssh-home-alice"),
+        "Shell mode must have ssh-home-alice volume"
+    );
+
+    let init = pod_spec.init_containers.as_ref().unwrap();
+    assert!(
+        init.iter().any(|c| c.name == "setup-ssh-home"),
+        "Shell mode must have setup-ssh-home init container"
+    );
+    let setup = init.iter().find(|c| c.name == "setup-ssh-home").unwrap();
+    let setup_mounts = setup.volume_mounts.as_ref().unwrap();
+    assert!(
+        setup_mounts.iter().any(|m| m.name == "ssh-home-alice"),
+        "setup-ssh-home must mount ssh-home-alice"
+    );
+}
+
+#[test]
+fn test_pvc_ssh_bastion_shell_mode_creates_home_pvcs() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-shell-pvc".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![
+                    SshUser {
+                        name: "alice".into(),
+                        uid: 1001,
+                        gid: 1001,
+                        shell: None,
+                        public_keys: String::new(),
+                    },
+                    SshUser {
+                        name: "bob".into(),
+                        uid: 1002,
+                        gid: 1002,
+                        shell: None,
+                        public_keys: String::new(),
+                    },
+                ],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let pvcs = servarr_resources::pvc::build_all(&app);
+    // host-keys (default) + ssh-home-alice + ssh-home-bob
+    assert_eq!(pvcs.len(), 3, "Shell mode should have host-keys PVC plus one per user");
+
+    let alice_pvc = pvcs.iter().find(|p| {
+        p.metadata.name.as_deref() == Some("bastion-ssh-home-alice")
+    });
+    assert!(alice_pvc.is_some(), "should have ssh-home-alice PVC");
+
+    let bob_pvc = pvcs.iter().find(|p| {
+        p.metadata.name.as_deref() == Some("bastion-ssh-home-bob")
+    });
+    assert!(bob_pvc.is_some(), "should have ssh-home-bob PVC");
+
+    let alice_pvc = alice_pvc.unwrap();
+    let spec = alice_pvc.spec.as_ref().unwrap();
+    assert_eq!(spec.access_modes.as_deref(), Some(&["ReadWriteOnce".to_string()][..]));
+}
+
+#[test]
+fn test_pvc_ssh_bastion_non_shell_no_home_pvcs() {
+    // SshMode::Sftp should NOT produce ssh-home PVCs
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-sftp-pvc".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Sftp,
+                users: vec![SshUser {
+                    name: "alice".into(),
+                    uid: 1001,
+                    gid: 1001,
+                    shell: None,
+                    public_keys: String::new(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let pvcs = servarr_resources::pvc::build_all(&app);
+    // host-keys only
+    assert_eq!(pvcs.len(), 1, "Non-shell mode should only have host-keys PVC");
+    assert!(!pvcs.iter().any(|p| p.metadata.name.as_deref().unwrap_or("").contains("ssh-home")));
+}
+
+#[test]
+fn test_deployment_ssh_bastion_shell_mode_home_mounts() {
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-shell-deploy".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Shell,
+                users: vec![SshUser {
+                    name: "alice".into(),
+                    uid: 1001,
+                    gid: 1001,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let mounts = container.volume_mounts.as_ref().unwrap();
+    let volumes = pod_spec.volumes.as_ref().unwrap();
+
+    // Should have ssh-home-alice volume mount at /home/alice/.ssh
+    let home_mount = mounts.iter().find(|m| m.name == "ssh-home-alice");
+    assert!(home_mount.is_some(), "shell mode should have ssh-home-alice volume mount");
+    assert_eq!(
+        home_mount.unwrap().mount_path, "/home/alice/.ssh",
+        "home mount path must be /home/<user>/.ssh"
+    );
+
+    // Should have matching PVC-backed volume
+    assert!(
+        volumes.iter().any(|v| v.name == "ssh-home-alice" && v.persistent_volume_claim.is_some()),
+        "should have ssh-home-alice PVC volume"
+    );
+
+    // setup-ssh-home init container must exist
+    let init = pod_spec.init_containers.as_ref().unwrap();
+    let setup = init.iter().find(|c| c.name == "setup-ssh-home");
+    assert!(setup.is_some(), "shell mode should have setup-ssh-home init container");
+
+    let setup = setup.unwrap();
+    let cmd = setup.command.as_ref().unwrap().join(" ");
+    assert!(cmd.contains("mkdir") || setup.command.as_ref().unwrap().last().unwrap_or(&String::new()).contains("mkdir"),
+        "setup-ssh-home command should create ~/.ssh directory");
+    assert!(
+        setup.volume_mounts.as_ref().unwrap().iter().any(|m| m.name == "ssh-home-alice"),
+        "setup-ssh-home init container must mount ssh-home-alice"
+    );
+}
+
+#[test]
 fn test_networkpolicy_builder() {
     let app = make_app(AppType::Sonarr);
     let np = servarr_resources::networkpolicy::build(&app);
