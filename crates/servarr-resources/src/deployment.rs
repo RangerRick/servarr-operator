@@ -129,15 +129,39 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
         ..Default::default()
     };
 
-    let mut init_containers = build_init_containers(app, &image, &container_security);
+    let mut init_containers = build_init_containers(app, &image, &container_security, uid, gid);
     if matches!(app.spec.app, AppType::SshBastion) {
         build_ssh_bastion_init_containers(&mut init_containers, app, &image, &container_security);
     }
+
+    // SshBastion: override the image CMD to tell sshd which port to listen on.
+    // panubo/sshd defaults to port 22 but operators configure port 2222 via
+    // the service spec.  Passing -p avoids mutating sshd_config inside the
+    // container, which would only take effect in that container's overlay layer.
+    let ssh_bastion_args: Option<Vec<String>> =
+        if matches!(app.spec.app, AppType::SshBastion) {
+            let ssh_port = svc_spec
+                .ports
+                .first()
+                .map_or(22, |p| p.port);
+            Some(vec![
+                "/usr/sbin/sshd".into(),
+                "-D".into(),
+                "-e".into(),
+                "-f".into(),
+                "/etc/ssh/sshd_config".into(),
+                "-p".into(),
+                ssh_port.to_string(),
+            ])
+        } else {
+            None
+        };
 
     let container = Container {
         name: app.spec.app.to_string(),
         image: Some(image.clone()),
         image_pull_policy: Some(image_spec.pull_policy.clone()),
+        args: ssh_bastion_args,
         ports: Some(container_ports),
         env: Some(env_vars),
         volume_mounts: Some(volume_mounts),
@@ -335,20 +359,21 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
         });
     }
 
-    // SSH bastion: authorized keys per user + optional restricted-rsync script
+    // SSH bastion: mount the whole authorized-keys Secret as a read-only directory.
+    // panubo/sshd ≥1.10.0 has a bug: its `while read -d ''` loop exits with code 1
+    // (causing set -e to abort) when the last file it chmod's is not writable.
+    // Mounting the entire directory as read-only makes `[ -w /etc/authorized_keys ]`
+    // return false, causing entry.sh to skip the chmod block entirely.
     if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
-        for user in &sc.users {
-            if !user.public_keys.is_empty() {
-                mounts.push(VolumeMount {
-                    name: format!("authorized-keys-{}", user.name),
-                    mount_path: format!("/etc/authorized_keys/{}", user.name),
-                    sub_path: Some(user.name.clone()),
-                    read_only: Some(true),
-                    ..Default::default()
-                });
-            }
+        if sc.users.iter().any(|u| !u.public_keys.is_empty()) {
+            mounts.push(VolumeMount {
+                name: "authorized-keys".into(),
+                mount_path: "/etc/authorized_keys".into(),
+                read_only: Some(true),
+                ..Default::default()
+            });
         }
-        if sc.mode == SshMode::RestrictedRsync {
+        if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
             mounts.push(VolumeMount {
                 name: "restricted-rsync".into(),
                 mount_path: "/usr/local/bin/restricted-rsync".into(),
@@ -469,29 +494,23 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
         });
     }
 
-    // SSH bastion: authorized-keys Secret (per user) + restricted-rsync ConfigMap
+    // SSH bastion: mount the whole authorized-keys Secret as a single directory volume
+    // (see build_volume_mounts for why we avoid per-user subPath mounts).
     if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
         use k8s_openapi::api::core::v1::SecretVolumeSource;
         let secret_name = common::child_name(app, "authorized-keys");
-        for user in &sc.users {
-            if !user.public_keys.is_empty() {
-                volumes.push(Volume {
-                    name: format!("authorized-keys-{}", user.name),
-                    secret: Some(SecretVolumeSource {
-                        secret_name: Some(secret_name.clone()),
-                        items: Some(vec![k8s_openapi::api::core::v1::KeyToPath {
-                            key: user.name.clone(),
-                            path: user.name.clone(),
-                            mode: Some(0o444),
-                        }]),
-                        default_mode: Some(0o444),
-                        ..Default::default()
-                    }),
+        if sc.users.iter().any(|u| !u.public_keys.is_empty()) {
+            volumes.push(Volume {
+                name: "authorized-keys".into(),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(secret_name.clone()),
+                    default_mode: Some(0o444),
                     ..Default::default()
-                });
-            }
+                }),
+                ..Default::default()
+            });
         }
-        if sc.mode == SshMode::RestrictedRsync {
+        if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
             volumes.push(Volume {
                 name: "restricted-rsync".into(),
                 config_map: Some(ConfigMapVolumeSource {
@@ -579,7 +598,7 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
             .iter()
             .map(|u| {
                 let shell = u.shell.clone().unwrap_or_else(|| {
-                    if sc.mode == SshMode::RestrictedRsync {
+                    if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
                         "/usr/local/bin/restricted-rsync".to_string()
                     } else {
                         "/bin/sh".to_string()
@@ -857,16 +876,27 @@ fn build_init_containers(
     app: &ServarrApp,
     image: &str,
     security_context: &SecurityContext,
+    uid: i64,
+    gid: i64,
 ) -> Vec<Container> {
     let mut init = Vec::new();
 
     // Transmission settings apply init container
     if matches!(app.spec.app, AppType::Transmission) {
+        // Run as the app uid/gid explicitly.  The LinuxServer security profile drops
+        // DAC_OVERRIDE from capabilities, so even root cannot read files owned by
+        // another uid.  After a successful run the script chowns settings.json to
+        // uid:gid, so subsequent restarts must also run as uid to retain read access.
+        let init_sec = SecurityContext {
+            run_as_user: Some(uid),
+            run_as_group: Some(gid),
+            ..security_context.clone()
+        };
         init.push(Container {
             name: "apply-settings".into(),
             image: Some(image.to_string()),
             command: Some(vec!["/bin/sh".into(), "/scripts/apply-settings.sh".into()]),
-            security_context: Some(security_context.clone()),
+            security_context: Some(init_sec),
             volume_mounts: Some(vec![
                 VolumeMount {
                     name: "config".into(),
@@ -994,9 +1024,9 @@ fi
 "#,
     );
 
-    if ssh_config.mode == SshMode::RestrictedRsync {
+    if ssh_config.mode == SshMode::RestrictedRsync || ssh_config.mode == SshMode::Rsync {
         patch_script.push_str(
-            r#"# Install rsync for restricted-rsync mode
+            r#"# Install rsync (required for rsync/restricted-rsync modes)
 apk add --no-cache rsync >/dev/null 2>&1 || true
 "#,
         );

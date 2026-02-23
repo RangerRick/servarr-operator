@@ -142,10 +142,22 @@ fn test_deployment_builder_transmission() {
     let mounts = container.volume_mounts.as_ref().unwrap();
     assert!(mounts.iter().any(|m| m.name == "watch"));
 
-    // Check init container exists
+    // Check init container exists and runs as the app uid so it can read/write
+    // settings.json after chown (DAC_OVERRIDE is dropped from capabilities).
     let init = pod_spec.init_containers.as_ref().unwrap();
     assert_eq!(init.len(), 1);
     assert_eq!(init[0].name, "apply-settings");
+    let init_sec = init[0].security_context.as_ref().unwrap();
+    assert_eq!(
+        init_sec.run_as_user,
+        Some(65534),
+        "init container must run as app uid"
+    );
+    assert_eq!(
+        init_sec.run_as_group,
+        Some(65534),
+        "init container must run as app gid"
+    );
 
     // Check volumes include scripts ConfigMap
     let volumes = pod_spec.volumes.as_ref().unwrap();
@@ -1136,7 +1148,6 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
                 mode: SshMode::RestrictedRsync,
                 restricted_rsync: Some(RestrictedRsyncConfig {
                     allowed_paths: vec!["/data/backups".into(), "/media".into()],
-                    read_only: true,
                 }),
                 users: vec![SshUser {
                     name: "backup".into(),
@@ -1163,7 +1174,47 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
     let script = &data["restricted-rsync.sh"];
     assert!(script.contains("/data/backups"));
     assert!(script.contains("/media"));
-    assert!(script.contains("READONLY=true"));
+    assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
+    assert!(!script.contains("READONLY"), "READONLY variable must not exist; read-only is always enforced");
+}
+
+#[test]
+fn test_configmap_ssh_bastion_rsync_mode_produces_configmap() {
+    // SshMode::Rsync should also produce the read-only rsync wrapper, without path restrictions.
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-rsync".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Rsync,
+                users: vec![SshUser {
+                    name: "backup".into(),
+                    uid: 1000,
+                    gid: 1000,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
+    assert!(cm.is_some(), "SshMode::Rsync should produce a restricted-rsync ConfigMap");
+    let script = &cm.unwrap().data.unwrap()["restricted-rsync.sh"];
+    assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
+    // No allowed paths configured — ALLOWED_PATHS array must be empty
+    assert!(
+        script.contains("ALLOWED_PATHS=(\n\n)") || script.contains("ALLOWED_PATHS=(\n)"),
+        "Rsync mode must have empty ALLOWED_PATHS"
+    );
 }
 
 #[test]
@@ -1389,7 +1440,6 @@ fn test_deployment_ssh_bastion_init_containers() {
                 }],
                 restricted_rsync: Some(RestrictedRsyncConfig {
                     allowed_paths: vec!["/data".into()],
-                    read_only: true,
                 }),
                 ..Default::default()
             })),
@@ -1412,12 +1462,30 @@ fn test_deployment_ssh_bastion_init_containers() {
         "SSH bastion should have patch-entry init container"
     );
 
-    // Should have authorized-keys volume mount
+    // Should have authorized-keys directory mount (not per-user subPath).
+    // panubo/sshd ≥1.10.0 exits with set -e when the read-only subPath file's
+    // chmod returns 1, so we mount the whole Secret as a read-only directory so
+    // entry.sh skips the chmod block.
     let container = &pod_spec.containers[0];
     let mounts = container.volume_mounts.as_ref().unwrap();
+    let ak_mount = mounts.iter().find(|m| m.name == "authorized-keys");
     assert!(
-        mounts.iter().any(|m| m.name == "authorized-keys-backup"),
-        "SSH bastion should have authorized-keys volume mount for user"
+        ak_mount.is_some(),
+        "SSH bastion should have authorized-keys directory volume mount"
+    );
+    let ak_mount = ak_mount.unwrap();
+    assert_eq!(
+        ak_mount.mount_path, "/etc/authorized_keys",
+        "authorized-keys should mount at /etc/authorized_keys"
+    );
+    assert_eq!(
+        ak_mount.read_only,
+        Some(true),
+        "authorized-keys mount must be read-only"
+    );
+    assert!(
+        ak_mount.sub_path.is_none(),
+        "authorized-keys must be a directory mount, not a subPath file"
     );
 
     // Should have restricted-rsync volume mount
@@ -1429,12 +1497,70 @@ fn test_deployment_ssh_bastion_init_containers() {
     // Volumes should include authorized-keys secret and restricted-rsync configmap
     let volumes = pod_spec.volumes.as_ref().unwrap();
     assert!(
-        volumes.iter().any(|v| v.name == "authorized-keys-backup"),
+        volumes.iter().any(|v| v.name == "authorized-keys"),
         "Should have authorized-keys volume"
     );
     assert!(
         volumes.iter().any(|v| v.name == "restricted-rsync"),
         "Should have restricted-rsync volume"
+    );
+
+    // args should include -p with the SSH port so sshd listens on the right port
+    let args = container.args.as_ref().expect("SSH bastion should have args");
+    let p_idx = args.iter().position(|a| a == "-p").expect("args should include -p flag");
+    assert!(p_idx + 1 < args.len(), "args should have a port value after -p");
+}
+
+#[test]
+fn test_deployment_ssh_bastion_rsync_mode_uses_restricted_rsync() {
+    // SshMode::Rsync must mount the restricted-rsync script and use it as the user shell.
+    let app = ServarrApp {
+        metadata: ObjectMeta {
+            name: Some("bastion".into()),
+            namespace: Some("infra".into()),
+            uid: Some("uid-ssh-rsync-deploy".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::SshBastion,
+            app_config: Some(AppConfig::SshBastion(SshBastionConfig {
+                mode: SshMode::Rsync,
+                users: vec![SshUser {
+                    name: "backup".into(),
+                    uid: 1000,
+                    gid: 1000,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+    let container = &pod_spec.containers[0];
+    let mounts = container.volume_mounts.as_ref().unwrap();
+
+    assert!(
+        mounts.iter().any(|m| m.name == "restricted-rsync"),
+        "SshMode::Rsync must mount the restricted-rsync script"
+    );
+
+    let volumes = pod_spec.volumes.as_ref().unwrap();
+    assert!(
+        volumes.iter().any(|v| v.name == "restricted-rsync"),
+        "SshMode::Rsync must have restricted-rsync volume"
+    );
+
+    // Shell must be the restricted-rsync wrapper
+    let env = container.env.as_ref().unwrap();
+    let ssh_users = env.iter().find(|e| e.name == "SSH_USERS").unwrap();
+    assert!(
+        ssh_users.value.as_deref().unwrap_or("").contains("/usr/local/bin/restricted-rsync"),
+        "SshMode::Rsync user shell must be /usr/local/bin/restricted-rsync"
     );
 }
 
@@ -2712,7 +2838,9 @@ fn test_nfs_server_service_name_and_namespace() {
 fn test_nfs_server_service_port_2049() {
     let svc = servarr_resources::nfs_server::build_service("mystack", "media", make_owner_ref());
     let spec = svc.spec.unwrap();
-    assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
+    // Headless service (clusterIP: None) so DNS returns the pod IP directly,
+    // allowing the kubelet to reach the NFS server without cluster DNS.
+    assert_eq!(spec.cluster_ip.as_deref(), Some("None"));
     let ports = spec.ports.unwrap();
     assert!(
         ports.iter().any(|p| p.port == 2049),

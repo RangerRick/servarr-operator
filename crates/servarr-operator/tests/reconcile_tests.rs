@@ -1673,7 +1673,6 @@ async fn test_ssh_bastion_reconcile() {
             mode: SshMode::RestrictedRsync,
             restricted_rsync: Some(RestrictedRsyncConfig {
                 allowed_paths: vec!["/data/media".into()],
-                read_only: true,
             }),
             ..Default::default()
         })),
@@ -2381,6 +2380,23 @@ async fn test_media_stack_nfs_in_cluster_creates_statefulset_and_service() {
                 .set_body_json(service_response("nfs-test-nfs-server", "test")),
         )
         .named("patch-nfs-service")
+        .mount(&mock_server)
+        .await;
+
+    // Expect GET for NFS server pod IP lookup (pod not yet running → 404)
+    Mock::given(method("GET"))
+        .and(path(
+            "/api/v1/namespaces/test/pods/nfs-test-nfs-server-0",
+        ))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Status",
+            "status": "Failure",
+            "message": "pods \"nfs-test-nfs-server-0\" not found",
+            "reason": "NotFound",
+            "code": 404
+        })))
+        .named("get-nfs-pod")
         .mount(&mock_server)
         .await;
 

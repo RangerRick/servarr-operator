@@ -184,13 +184,6 @@ pub struct RestrictedRsyncConfig {
     /// Paths that users are allowed to rsync from.
     #[serde(default)]
     pub allowed_paths: Vec<String>,
-    /// Whether to enforce read-only mode (default: true).
-    #[serde(default = "default_readonly")]
-    pub read_only: bool,
-}
-
-fn default_readonly() -> bool {
-    true
 }
 
 // --- Overseerr ---

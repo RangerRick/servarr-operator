@@ -13,39 +13,42 @@ pub fn build(app: &ServarrApp) -> Option<ConfigMap> {
     }
 }
 
-/// Build a ConfigMap containing the restricted-rsync wrapper script for SSH bastion.
+/// Build a ConfigMap containing the read-only rsync wrapper script for SSH bastion.
+///
+/// Used for both `SshMode::Rsync` (any path, read-only) and `SshMode::RestrictedRsync`
+/// (specific paths only, read-only).  Rsync is always read-only — write operations are
+/// never permitted.
 pub fn build_ssh_bastion_restricted_rsync(app: &ServarrApp) -> Option<ConfigMap> {
     let ssh_config = match app.spec.app_config {
-        Some(AppConfig::SshBastion(ref sc)) if sc.mode == SshMode::RestrictedRsync => sc,
+        Some(AppConfig::SshBastion(ref sc))
+            if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync =>
+        {
+            sc
+        }
         _ => return None,
     };
 
-    let rr = ssh_config
+    let allowed_paths: String = ssh_config
         .restricted_rsync
         .as_ref()
-        .cloned()
+        .map(|rr| {
+            rr.allowed_paths
+                .iter()
+                .map(|p| format!("      \"{p}\""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_default();
-
-    let allowed_paths: String = rr
-        .allowed_paths
-        .iter()
-        .map(|p| format!("      \"{p}\""))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let read_only = rr.read_only;
 
     let script = format!(
         r#"#!/bin/bash
-# Restricted rsync wrapper - only allows rsync to specific paths
+# Read-only rsync wrapper - enforces --sender and optionally restricts to allowed paths
 set -eo pipefail
 
-# Allowed paths
+# Allowed paths (empty = allow any path)
 ALLOWED_PATHS=(
 {allowed_paths}
 )
-
-# Read-only mode
-READONLY={read_only}
 
 # Get the command string
 # When used as a login shell, SSH invokes: /path/to/shell -c "command"
@@ -85,7 +88,7 @@ if [[ "${{ARGS[0]}}" != "rsync" ]]; then
   log_reject "Only rsync commands are allowed"
 fi
 
-# Check for --sender flag (required for read-only mode)
+# Enforce read-only: --sender flag must be present (rsync sends data to client = read-only)
 has_sender=false
 for arg in "${{ARGS[@]}}"; do
   if [[ "$arg" == "--sender" ]]; then
@@ -94,7 +97,7 @@ for arg in "${{ARGS[@]}}"; do
   fi
 done
 
-if [[ "$READONLY" == "true" && "$has_sender" != "true" ]]; then
+if [[ "$has_sender" != "true" ]]; then
   log_reject "Write operations not allowed (read-only mode)"
 fi
 
@@ -121,25 +124,28 @@ if [[ "$RSYNC_PATH" == *".."* ]]; then
   log_reject "Path traversal not allowed"
 fi
 
-# Normalize path: resolve to absolute and remove trailing slashes
-if [[ -e "$RSYNC_PATH" ]]; then
-  RESOLVED_PATH=$(realpath "$RSYNC_PATH")
-else
-  RESOLVED_PATH="${{RSYNC_PATH%/}}"
-fi
-
-# Check if path is within allowed paths
-path_allowed=false
-for allowed in "${{ALLOWED_PATHS[@]}}"; do
-  allowed="${{allowed%/}}"
-  if [[ "$RESOLVED_PATH" == "$allowed" || "$RESOLVED_PATH" == "$allowed"/* ]]; then
-    path_allowed=true
-    break
+# If no allowed paths are configured, any path is permitted (Rsync mode).
+# If allowed paths are configured, enforce the path allowlist (RestrictedRsync mode).
+if [[ "${{#ALLOWED_PATHS[@]}}" -gt 0 ]]; then
+  # Normalize path: resolve to absolute and remove trailing slashes
+  if [[ -e "$RSYNC_PATH" ]]; then
+    RESOLVED_PATH=$(realpath "$RSYNC_PATH")
+  else
+    RESOLVED_PATH="${{RSYNC_PATH%/}}"
   fi
-done
 
-if [[ "$path_allowed" != "true" ]]; then
-  log_reject "Path not in allowed list: $RSYNC_PATH"
+  path_allowed=false
+  for allowed in "${{ALLOWED_PATHS[@]}}"; do
+    allowed="${{allowed%/}}"
+    if [[ "$RESOLVED_PATH" == "$allowed" || "$RESOLVED_PATH" == "$allowed"/* ]]; then
+      path_allowed=true
+      break
+    fi
+  done
+
+  if [[ "$path_allowed" != "true" ]]; then
+    log_reject "Path not in allowed list: $RSYNC_PATH"
+  fi
 fi
 
 # Log successful access
@@ -344,16 +350,21 @@ if ! command -v jq >/dev/null 2>&1; then
   apk add --no-cache jq >/dev/null 2>&1
 fi
 
-# If settings.json doesn't exist, create a minimal one
+# If settings.json doesn't exist, create a minimal one.
+# /config may be world-writable on first boot (before linuxserver /init runs).
 if [ ! -f "$SETTINGS_FILE" ]; then
   echo "Creating initial settings.json..."
   echo '{{}}' > "$SETTINGS_FILE"
 fi
 
-# Merge override settings into existing settings
+# Merge override settings into existing settings.
+# Write to /tmp first so we never touch a stale /config/*.tmp owned by a
+# different uid, then copy back to settings.json (owner-writable).
 echo "Applying settings overrides..."
-jq -s '.[0] * .[1]' "$SETTINGS_FILE" "$OVERRIDE_FILE" > "${{SETTINGS_FILE}}.tmp"
-mv "${{SETTINGS_FILE}}.tmp" "$SETTINGS_FILE"
+TMP=$(mktemp)
+jq -s '.[0] * .[1]' "$SETTINGS_FILE" "$OVERRIDE_FILE" > "$TMP"
+cp "$TMP" "$SETTINGS_FILE"
+rm -f "$TMP"
 
 # Fix ownership
 chown {uid}:{gid} "$SETTINGS_FILE"
