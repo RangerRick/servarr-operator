@@ -13,7 +13,7 @@
 #   Lidarr                   /music
 #   SABnzbd / Transmission   /movies  /tv  /music  /movies-4k  /tv-4k
 #   Maintainerr               /movies  /tv
-#   SshBastion                /movies  /tv  /music
+#   SshBastion (rsync/shell)  /movies  /tv  /music
 #
 # No manual nfsMounts config is needed for these apps.
 #
@@ -249,11 +249,29 @@ spec:
       # Automated media cleanup.  Gets /movies and /tv auto-injected.
 
     - app: SshBastion
-      # Secure SFTP access for manual file management.
+      # Read-only rsync access for automated backups.
       # Gets /movies, /tv, and /music auto-injected.
       appConfig:
         sshBastion:
-          mode: sftp
+          mode: restricted-rsync
+          restrictedRsync:
+            allowedPaths:
+              - /movies
+              - /tv
+              - /music
+          users:
+            - name: backup
+              uid: 1000
+              gid: 1000
+              publicKeys: |
+                ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... backup@nas
+
+    - app: SshBastion
+      # Interactive shell for manual file management.
+      # Gets /movies, /tv, and /music auto-injected.
+      appConfig:
+        sshBastion:
+          mode: shell
           users:
             - name: mediaadmin
               uid: 1000
