@@ -361,6 +361,15 @@ fn inject_nfs_mounts(
             make("movies-4k", &nfs.movies_4k_path, &nfs.movies_4k_path.clone()),
             make("tv-4k", &nfs.tv_4k_path, &nfs.tv_4k_path.clone()),
         ],
+        AppType::Maintainerr => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+        ],
+        AppType::SshBastion => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+            make("music", &nfs.music_path, &nfs.music_path.clone()),
+        ],
         _ => return,
     };
 

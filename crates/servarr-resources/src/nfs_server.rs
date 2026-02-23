@@ -14,11 +14,18 @@ use std::collections::BTreeMap;
 
 const MANAGED_BY: &str = "servarr-operator";
 const NFS_PORT: i32 = 2049;
+const PORTMAPPER_PORT: i32 = 111;
+const MOUNTD_PORT: i32 = 32767;
 const COMPONENT: &str = "nfs-server";
 const DEFAULT_IMAGE: &str = "erichough/nfs-server";
 const EXPORT_DIR: &str = "/nfsshare";
+// fsid=0 makes /nfsshare the NFSv4 pseudo-root.  Without it the kernel NFS
+// server has no defined root, NFSv4 LOOKUP for /movies (etc.) fails, and
+// clients fall back to NFSv3 which needs portmapper — unavailable on Docker
+// Desktop.  With fsid=0 clients mount server:/movies and the server resolves
+// it relative to /nfsshare.
 const EXPORT_OPTS: &str =
-    "*(rw,async,no_subtree_check,no_auth_nlm,insecure,no_root_squash)";
+    "*(rw,async,no_subtree_check,no_auth_nlm,insecure,no_root_squash,fsid=0)";
 const DATA_VOLUME: &str = "data";
 
 fn resource_name(stack_name: &str) -> String {
@@ -111,6 +118,31 @@ pub fn build_statefulset(
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
+                    init_containers: Some(vec![Container {
+                        name: "mkdir".to_string(),
+                        image: Some("busybox:latest".to_string()),
+                        image_pull_policy: Some("IfNotPresent".to_string()),
+                        command: Some(vec!["sh".to_string(), "-c".to_string(), {
+                            let dirs = [
+                                nfs.movies_path.as_str(),
+                                nfs.tv_path.as_str(),
+                                nfs.music_path.as_str(),
+                                nfs.movies_4k_path.as_str(),
+                                nfs.tv_4k_path.as_str(),
+                            ]
+                            .iter()
+                            .map(|p| format!("{EXPORT_DIR}{p}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                            format!("mkdir -p {dirs}")
+                        }]),
+                        volume_mounts: Some(vec![VolumeMount {
+                            name: DATA_VOLUME.to_string(),
+                            mount_path: EXPORT_DIR.to_string(),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }]),
                     containers: vec![Container {
                         name: COMPONENT.to_string(),
                         image: Some(image),
@@ -120,12 +152,38 @@ pub fn build_statefulset(
                             value: Some(format!("{EXPORT_DIR} {EXPORT_OPTS}")),
                             ..Default::default()
                         }]),
-                        ports: Some(vec![ContainerPort {
-                            name: Some("nfs".to_string()),
-                            container_port: NFS_PORT,
-                            protocol: Some("TCP".to_string()),
-                            ..Default::default()
-                        }]),
+                        ports: Some(vec![
+                            ContainerPort {
+                                name: Some("nfs".to_string()),
+                                container_port: NFS_PORT,
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                            ContainerPort {
+                                name: Some("portmapper-tcp".to_string()),
+                                container_port: PORTMAPPER_PORT,
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                            ContainerPort {
+                                name: Some("portmapper-udp".to_string()),
+                                container_port: PORTMAPPER_PORT,
+                                protocol: Some("UDP".to_string()),
+                                ..Default::default()
+                            },
+                            ContainerPort {
+                                name: Some("mountd-tcp".to_string()),
+                                container_port: MOUNTD_PORT,
+                                protocol: Some("TCP".to_string()),
+                                ..Default::default()
+                            },
+                            ContainerPort {
+                                name: Some("mountd-udp".to_string()),
+                                container_port: MOUNTD_PORT,
+                                protocol: Some("UDP".to_string()),
+                                ..Default::default()
+                            },
+                        ]),
                         security_context: Some(SecurityContext {
                             privileged: Some(true),
                             ..Default::default()
@@ -167,15 +225,49 @@ pub fn build_service(
             ..Default::default()
         },
         spec: Some(ServiceSpec {
-            type_: Some("ClusterIP".to_string()),
+            // Headless (clusterIP: None) so DNS returns the pod IP directly.
+            // The kubelet runs in the host network namespace where ClusterIP
+            // iptables rules don't apply; pod IPs are routable but virtual
+            // ClusterIPs are not.
+            cluster_ip: Some("None".to_string()),
             selector: Some(selector_labels(stack_name)),
-            ports: Some(vec![ServicePort {
-                name: Some("nfs".to_string()),
-                port: NFS_PORT,
-                target_port: Some(IntOrString::Int(NFS_PORT)),
-                protocol: Some("TCP".to_string()),
-                ..Default::default()
-            }]),
+            ports: Some(vec![
+                ServicePort {
+                    name: Some("nfs".to_string()),
+                    port: NFS_PORT,
+                    target_port: Some(IntOrString::Int(NFS_PORT)),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                },
+                ServicePort {
+                    name: Some("portmapper-tcp".to_string()),
+                    port: PORTMAPPER_PORT,
+                    target_port: Some(IntOrString::Int(PORTMAPPER_PORT)),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                },
+                ServicePort {
+                    name: Some("portmapper-udp".to_string()),
+                    port: PORTMAPPER_PORT,
+                    target_port: Some(IntOrString::Int(PORTMAPPER_PORT)),
+                    protocol: Some("UDP".to_string()),
+                    ..Default::default()
+                },
+                ServicePort {
+                    name: Some("mountd-tcp".to_string()),
+                    port: MOUNTD_PORT,
+                    target_port: Some(IntOrString::Int(MOUNTD_PORT)),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                },
+                ServicePort {
+                    name: Some("mountd-udp".to_string()),
+                    port: MOUNTD_PORT,
+                    target_port: Some(IntOrString::Int(MOUNTD_PORT)),
+                    protocol: Some("UDP".to_string()),
+                    ..Default::default()
+                },
+            ]),
             ..Default::default()
         }),
         ..Default::default()

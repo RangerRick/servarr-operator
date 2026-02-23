@@ -540,7 +540,9 @@ pub struct NfsServerSpec {
     /// Subpath within the NFS share for movies, and the container mount path.
     /// Defaults to "/movies".
     ///
-    /// For in-cluster NFS the server-side path is `/nfsshare{moviesPath}`.
+    /// For in-cluster NFS the server-side path equals `moviesPath` (the
+    /// in-cluster export root is `/nfsshare` with `fsid=0`, so `/movies` is
+    /// the full server path).
     /// For external NFS the server-side path is `{externalPath}{moviesPath}`.
     #[serde(default = "default_movies_path")]
     pub movies_path: String,
@@ -623,21 +625,21 @@ impl NfsServerSpec {
 
     /// Compute the NFS server-side path for a given media subpath.
     ///
-    /// For in-cluster servers the export root is `/nfsshare`, so
-    /// `nfs_path("/movies")` → `"/nfsshare/movies"`.
+    /// For in-cluster servers `/nfsshare` is the NFSv4 root (`fsid=0`), so
+    /// clients mount paths relative to it: `nfs_path("/movies")` → `"/movies"`.
     ///
     /// For external servers the export root is `external_path`, so
     /// `nfs_path("/movies")` with `external_path="/volume1"` → `"/volume1/movies"`.
     pub fn nfs_path(&self, media_subpath: &str) -> String {
-        let root = if self.external_server.is_some() {
-            self.external_path.trim_end_matches('/')
+        if self.external_server.is_some() {
+            let root = self.external_path.trim_end_matches('/');
+            if root.is_empty() || root == "/" {
+                media_subpath.to_string()
+            } else {
+                format!("{root}{media_subpath}")
+            }
         } else {
-            "/nfsshare"
-        };
-        if root.is_empty() || root == "/" {
             media_subpath.to_string()
-        } else {
-            format!("{root}{media_subpath}")
         }
     }
 

@@ -285,10 +285,6 @@ spec:
                                   items:
                                     type: string
                                   type: array
-                                readOnly:
-                                  default: true
-                                  description: 'Whether to enforce read-only mode (default: true).'
-                                  type: boolean
                               type: object
                             sftpChroot:
                               default: '%h'

@@ -755,10 +755,11 @@ fn test_nfs_server_spec_server_address_disabled() {
 
 #[test]
 fn test_nfs_server_spec_nfs_path_in_cluster() {
-    // In-cluster server: paths are prefixed with the NFS export root (/nfsshare).
+    // In-cluster server: /nfsshare is the NFSv4 root (fsid=0), so paths are
+    // relative to it — no /nfsshare prefix needed from the client's perspective.
     let nfs = NfsServerSpec::default();
-    assert_eq!(nfs.nfs_path("/movies"), "/nfsshare/movies");
-    assert_eq!(nfs.nfs_path("/tv"), "/nfsshare/tv");
+    assert_eq!(nfs.nfs_path("/movies"), "/movies");
+    assert_eq!(nfs.nfs_path("/tv"), "/tv");
 }
 
 #[test]
@@ -863,7 +864,7 @@ fn test_nfs_inject_sonarr_gets_tv_mount() {
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].name, "tv");
     assert_eq!(mounts[0].server, "mystack-nfs-server.media.svc.cluster.local");
-    assert_eq!(mounts[0].path, "/nfsshare/tv");
+    assert_eq!(mounts[0].path, "/tv");
     assert_eq!(mounts[0].mount_path, "/tv");
 }
 
@@ -876,7 +877,7 @@ fn test_nfs_inject_radarr_gets_movies_mount() {
     let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].name, "movies");
-    assert_eq!(mounts[0].path, "/nfsshare/movies");
+    assert_eq!(mounts[0].path, "/movies");
     assert_eq!(mounts[0].mount_path, "/movies");
 }
 
@@ -889,7 +890,7 @@ fn test_nfs_inject_lidarr_gets_music_mount() {
     let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].name, "music");
-    assert_eq!(mounts[0].path, "/nfsshare/music");
+    assert_eq!(mounts[0].path, "/music");
     assert_eq!(mounts[0].mount_path, "/music");
 }
 
@@ -978,16 +979,16 @@ fn test_nfs_inject_split4k_sonarr_uses_4k_server_path_standard_mount() {
     let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
     assert_eq!(result.len(), 2);
 
-    // Standard instance: server path /nfsshare/tv, mounted at /tv
+    // Standard instance: server path /tv, mounted at /tv
     let (_, std_spec) = &result[0];
     let std_mounts = &std_spec.persistence.as_ref().unwrap().nfs_mounts;
-    assert_eq!(std_mounts[0].path, "/nfsshare/tv");
+    assert_eq!(std_mounts[0].path, "/tv");
     assert_eq!(std_mounts[0].mount_path, "/tv");
 
-    // 4K instance: server path /nfsshare/tv-4k, still mounted at /tv
+    // 4K instance: server path /tv-4k, still mounted at /tv
     let (_, k4_spec) = &result[1];
     let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
-    assert_eq!(k4_mounts[0].path, "/nfsshare/tv-4k");
+    assert_eq!(k4_mounts[0].path, "/tv-4k");
     assert_eq!(k4_mounts[0].mount_path, "/tv");
 }
 
@@ -1001,7 +1002,7 @@ fn test_nfs_inject_split4k_radarr_uses_4k_server_path_standard_mount() {
 
     let (_, k4_spec) = &result[1];
     let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
-    assert_eq!(k4_mounts[0].path, "/nfsshare/movies-4k");
+    assert_eq!(k4_mounts[0].path, "/movies-4k");
     assert_eq!(k4_mounts[0].mount_path, "/movies");
 }
 
@@ -1017,7 +1018,7 @@ fn test_nfs_inject_split4k_custom_4k_paths() {
     let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
     let (_, k4_spec) = &result[1];
     let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
-    assert_eq!(k4_mounts[0].path, "/nfsshare/custom-tv-4k");
+    assert_eq!(k4_mounts[0].path, "/custom-tv-4k");
     assert_eq!(k4_mounts[0].mount_path, "/tv");
 }
 
@@ -1047,6 +1048,35 @@ fn test_nfs_inject_split4k_user_override_via_split4k_overrides() {
     let tv_mount = k4_mounts.iter().find(|m| m.name == "tv").unwrap();
     assert_eq!(tv_mount.server, "custom-override-server", "override should win");
     assert_eq!(tv_mount.path, "/override/tv-4k");
+}
+
+#[test]
+fn test_nfs_inject_maintainerr_gets_movies_and_tv() {
+    let app = minimal_stack_app(AppType::Maintainerr);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    let names: Vec<&str> = mounts.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"movies"), "expected movies mount");
+    assert!(names.contains(&"tv"), "expected tv mount");
+    assert_eq!(mounts.len(), 2);
+    assert_eq!(mounts[0].server, "mystack-nfs-server.media.svc.cluster.local");
+    assert_eq!(mounts[0].path, "/movies");
+}
+
+#[test]
+fn test_nfs_inject_ssh_bastion_gets_movies_tv_music() {
+    let app = minimal_stack_app(AppType::SshBastion);
+    let nfs = nfs_in_cluster();
+    let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
+    let (_, spec) = &result[0];
+    let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
+    let names: Vec<&str> = mounts.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"movies"), "expected movies mount");
+    assert!(names.contains(&"tv"), "expected tv mount");
+    assert!(names.contains(&"music"), "expected music mount");
+    assert_eq!(mounts.len(), 3);
 }
 
 #[test]

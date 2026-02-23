@@ -21,6 +21,26 @@ watchAllNamespaces: false
 nodeSelector: {}
 tolerations: []
 
+# Node Feature Discovery (NFD) subchart.
+# Set nfd.enabled=true to install NFD alongside the operator in a single helm install.
+# NFD labels each node with detected hardware features (CPUs, GPUs, PCIe devices, kernel
+# modules), enabling GPU-aware scheduling for apps like Jellyfin and Plex.
+#
+# Standalone install (without this chart):
+#   helm install nfd oci://registry.k8s.io/nfd/charts/node-feature-discovery \
+#     --namespace node-feature-discovery --create-namespace --version 0.18.3
+#
+# All node-feature-discovery chart values can be passed under the nfd key, e.g.:
+#   nfd:
+#     enabled: true
+#     worker:
+#       config:
+#         sources:
+#           pci:
+#             deviceClassWhitelist: ["0300", "0302"]
+nfd:
+  enabled: false
+
 # Default container images for managed apps.
 # AUTO-GENERATED from image-defaults.toml — edit that file instead.
 # Regenerate with: scripts/sync-image-defaults.sh

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::{Api, DeleteParams, ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher;
@@ -86,13 +86,29 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
 
     let defaults = stack.spec.defaults.as_ref();
 
-    // Reconcile in-cluster NFS server StatefulSet and Service
-    reconcile_nfs_server(&stack, client, &name, &ns, &pp).await?;
+    // Reconcile in-cluster NFS server StatefulSet and Service.
+    // Returns the pod IP if the server is running (used below to bypass cluster DNS).
+    let nfs_pod_ip = reconcile_nfs_server(&stack, client, &name, &ns, &pp).await?;
+
+    // Build an effective NfsServerSpec: for in-cluster servers override the server
+    // address with the pod IP so the kubelet can resolve it without cluster DNS.
+    let nfs_override: Option<servarr_crds::NfsServerSpec>;
+    let effective_nfs = match (stack.spec.nfs.as_ref(), nfs_pod_ip) {
+        (Some(nfs), Some(ip)) if nfs.external_server.is_none() => {
+            nfs_override = Some(servarr_crds::NfsServerSpec {
+                external_server: Some(ip),
+                external_path: String::new(),
+                ..nfs.clone()
+            });
+            nfs_override.as_ref()
+        }
+        _ => stack.spec.nfs.as_ref(),
+    };
 
     // Collect enabled apps and expand split4k entries
     let mut expanded: Vec<(String, ServarrAppSpec, AppType, u8)> = Vec::new();
     for app in stack.spec.apps.iter().filter(|a| a.enabled) {
-        match app.expand(&name, &ns, defaults, stack.spec.nfs.as_ref()) {
+        match app.expand(&name, &ns, defaults, effective_nfs) {
             Ok(pairs) => {
                 for (child_name, spec) in pairs {
                     let tier = app.app.tier();
@@ -437,13 +453,18 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
 /// When `nfs.deploy_in_cluster()` is true, both resources are created/updated
 /// via server-side apply. When NFS is absent or external, any previously-created
 /// in-cluster resources are deleted so they don't linger.
+///
+/// Returns the NFS server pod IP if the pod is currently running, or `None`
+/// if the pod is not yet scheduled/running. Callers should use this IP directly
+/// instead of the service hostname because the kubelet mounts volumes from the
+/// host network namespace where cluster-internal DNS may not be available.
 async fn reconcile_nfs_server(
     stack: &MediaStack,
     client: &Client,
     name: &str,
     ns: &str,
     pp: &PatchParams,
-) -> Result<(), Error> {
+) -> Result<Option<String>, Error> {
     let nfs_name = format!("{name}-nfs-server");
     let ss_api = Api::<StatefulSet>::namespaced(client.clone(), ns);
     let svc_api = Api::<Service>::namespaced(client.clone(), ns);
@@ -485,28 +506,47 @@ async fn reconcile_nfs_server(
             .map_err(Error::Kube)?;
 
         info!(%name, %ns, "applied NFS server StatefulSet and Service");
-    } else {
-        // NFS disabled or external — remove any in-cluster resources.
-        for result in [
-            ss_api
-                .delete(&nfs_name, &DeleteParams::default())
-                .await
-                .map(|_| ()),
-            svc_api
-                .delete(&nfs_name, &DeleteParams::default())
-                .await
-                .map(|_| ()),
-        ] {
-            match result {
-                Err(e) if !is_not_found(&e) => {
-                    warn!(%name, error = %e, "failed to delete NFS server resource");
-                }
-                _ => {}
+
+        // Look up the pod IP of the running NFS server pod.  The kubelet mounts
+        // volumes from the host network namespace where cluster-internal DNS may
+        // not resolve.  Using the pod IP directly bypasses that limitation.
+        let pod_api = Api::<Pod>::namespaced(client.clone(), ns);
+        let pod_name = format!("{nfs_name}-0");
+        let pod_ip = pod_api
+            .get_opt(&pod_name)
+            .await
+            .map_err(Error::Kube)?
+            .and_then(|p| p.status?.pod_ip);
+
+        if let Some(ref ip) = pod_ip {
+            info!(%name, %ns, pod_ip = %ip, "NFS server pod IP resolved");
+        } else {
+            info!(%name, %ns, "NFS server pod not yet running; will retry");
+        }
+
+        return Ok(pod_ip);
+    }
+
+    // NFS disabled or external — remove any in-cluster resources.
+    for result in [
+        ss_api
+            .delete(&nfs_name, &DeleteParams::default())
+            .await
+            .map(|_| ()),
+        svc_api
+            .delete(&nfs_name, &DeleteParams::default())
+            .await
+            .map(|_| ()),
+    ] {
+        match result {
+            Err(e) if !is_not_found(&e) => {
+                warn!(%name, error = %e, "failed to delete NFS server resource");
             }
+            _ => {}
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 fn is_not_found(e: &kube::Error) -> bool {
