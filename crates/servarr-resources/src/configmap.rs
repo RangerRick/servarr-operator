@@ -13,35 +13,39 @@ pub fn build(app: &ServarrApp) -> Option<ConfigMap> {
     }
 }
 
-/// Build a ConfigMap containing the read-only rsync wrapper script for SSH bastion.
+/// Build a ConfigMap containing per-user read-only rsync wrapper scripts for SSH bastion.
 ///
-/// Used for both `SshMode::Rsync` (any path, read-only) and `SshMode::RestrictedRsync`
-/// (specific paths only, read-only).  Rsync is always read-only — write operations are
-/// never permitted.
+/// One key per user whose mode is `SshMode::Rsync` (any path, read-only) or
+/// `SshMode::RestrictedRsync` (specific paths only, read-only).  Rsync is always
+/// read-only — write operations are never permitted.
+///
+/// Returns `None` when no users have an rsync-based mode.
 pub fn build_ssh_bastion_restricted_rsync(app: &ServarrApp) -> Option<ConfigMap> {
     let ssh_config = match app.spec.app_config {
-        Some(AppConfig::SshBastion(ref sc))
-            if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync =>
-        {
-            sc
-        }
+        Some(AppConfig::SshBastion(ref sc)) => sc,
         _ => return None,
     };
 
-    let allowed_paths: String = ssh_config
-        .restricted_rsync
-        .as_ref()
-        .map(|rr| {
-            rr.allowed_paths
-                .iter()
-                .map(|p| format!("      \"{p}\""))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
+    let mut data = BTreeMap::new();
+    for user in &ssh_config.users {
+        if user.mode != SshMode::RestrictedRsync && user.mode != SshMode::Rsync {
+            continue;
+        }
 
-    let script = format!(
-        r#"#!/bin/bash
+        let allowed_paths: String = user
+            .restricted_rsync
+            .as_ref()
+            .map(|rr| {
+                rr.allowed_paths
+                    .iter()
+                    .map(|p| format!("      \"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        let script = format!(
+            r#"#!/bin/bash
 # Read-only rsync wrapper - enforces --sender and optionally restricts to allowed paths
 set -eo pipefail
 
@@ -154,10 +158,14 @@ logger -t restricted-rsync -p auth.info "ALLOWED: user=$USER path=$RSYNC_PATH"
 # Execute rsync with properly quoted arguments
 exec "${{ARGS[@]}}"
 "#
-    );
+        );
 
-    let mut data = BTreeMap::new();
-    data.insert("restricted-rsync.sh".into(), script);
+        data.insert(format!("restricted-rsync-{}.sh", user.name), script);
+    }
+
+    if data.is_empty() {
+        return None;
+    }
 
     Some(ConfigMap {
         metadata: ObjectMeta {

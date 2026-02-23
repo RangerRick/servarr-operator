@@ -402,18 +402,18 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
                 ..Default::default()
             });
         }
-        if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
-            mounts.push(VolumeMount {
-                name: "restricted-rsync".into(),
-                mount_path: "/usr/local/bin/restricted-rsync".into(),
-                sub_path: Some("restricted-rsync.sh".into()),
-                read_only: Some(true),
-                ..Default::default()
-            });
-        }
-        // Shell mode: per-user ~/.ssh PVC for persistent SSH client state
-        if sc.mode == SshMode::Shell {
-            for user in &sc.users {
+        for user in &sc.users {
+            if user.mode == SshMode::RestrictedRsync || user.mode == SshMode::Rsync {
+                mounts.push(VolumeMount {
+                    name: "restricted-rsync".into(),
+                    mount_path: format!("/usr/local/bin/restricted-rsync-{}", user.name),
+                    sub_path: Some(format!("restricted-rsync-{}.sh", user.name)),
+                    read_only: Some(true),
+                    ..Default::default()
+                });
+            }
+            // Shell mode: per-user ~/.ssh PVC for persistent SSH client state
+            if user.mode == SshMode::Shell {
                 mounts.push(VolumeMount {
                     name: format!("ssh-home-{}", user.name),
                     mount_path: format!("/home/{}/.ssh", user.name),
@@ -549,7 +549,7 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
                 ..Default::default()
             });
         }
-        if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
+        if sc.users.iter().any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync) {
             volumes.push(Volume {
                 name: "restricted-rsync".into(),
                 config_map: Some(ConfigMapVolumeSource {
@@ -561,8 +561,8 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
             });
         }
         // Shell mode: per-user ~/.ssh PVC volumes
-        if sc.mode == SshMode::Shell {
-            for user in &sc.users {
+        for user in &sc.users {
+            if user.mode == SshMode::Shell {
                 volumes.push(Volume {
                     name: format!("ssh-home-{}", user.name),
                     persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
@@ -650,8 +650,8 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
             .iter()
             .map(|u| {
                 let shell = u.shell.clone().unwrap_or_else(|| {
-                    if sc.mode == SshMode::RestrictedRsync || sc.mode == SshMode::Rsync {
-                        "/usr/local/bin/restricted-rsync".to_string()
+                    if u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync {
+                        format!("/usr/local/bin/restricted-rsync-{}", u.name)
                     } else {
                         "/bin/sh".to_string()
                     }
@@ -1088,7 +1088,11 @@ fi
 "#,
     );
 
-    if ssh_config.mode == SshMode::RestrictedRsync || ssh_config.mode == SshMode::Rsync {
+    if ssh_config
+        .users
+        .iter()
+        .any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync)
+    {
         patch_script.push_str(
             r#"# Install rsync (required for rsync/restricted-rsync modes)
 apk add --no-cache rsync >/dev/null 2>&1 || true
@@ -1123,9 +1127,13 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
     // Shell mode: set up per-user ~/.ssh directories with correct ownership and permissions.
     // The PVCs are mounted read-write; this init container initialises them on first boot
     // and is idempotent on subsequent restarts.
-    if ssh_config.mode == SshMode::Shell && !ssh_config.users.is_empty() {
-        let setup_cmds: String = ssh_config
-            .users
+    let shell_users: Vec<_> = ssh_config
+        .users
+        .iter()
+        .filter(|u| u.mode == SshMode::Shell)
+        .collect();
+    if !shell_users.is_empty() {
+        let setup_cmds: String = shell_users
             .iter()
             .map(|u| {
                 format!(
@@ -1140,8 +1148,7 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
 
         let setup_script = format!("#!/bin/sh\nset -e\n{setup_cmds}\necho 'SSH home dirs ready.'\n");
 
-        let setup_mounts: Vec<VolumeMount> = ssh_config
-            .users
+        let setup_mounts: Vec<VolumeMount> = shell_users
             .iter()
             .map(|u| VolumeMount {
                 name: format!("ssh-home-{}", u.name),

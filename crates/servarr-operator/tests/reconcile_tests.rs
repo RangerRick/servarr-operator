@@ -1667,13 +1667,13 @@ async fn test_ssh_bastion_reconcile() {
                 name: "testuser".into(),
                 uid: 1000,
                 gid: 1000,
+                mode: SshMode::RestrictedRsync,
+                restricted_rsync: Some(RestrictedRsyncConfig {
+                    allowed_paths: vec!["/data/media".into()],
+                }),
                 shell: None,
                 public_keys: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 test@example".into(),
             }],
-            mode: SshMode::RestrictedRsync,
-            restricted_rsync: Some(RestrictedRsyncConfig {
-                allowed_paths: vec!["/data/media".into()],
-            }),
             ..Default::default()
         })),
         ..Default::default()

@@ -265,11 +265,9 @@ fn validate_identity_immutable(
 }
 
 fn validate_ssh_shell_override(spec: &ServarrAppSpec, errors: &mut Vec<String>) {
-    if let Some(AppConfig::SshBastion(ref sc)) = spec.app_config
-        && sc.mode == SshMode::RestrictedRsync
-    {
+    if let Some(AppConfig::SshBastion(ref sc)) = spec.app_config {
         for user in &sc.users {
-            if user.shell.is_some() {
+            if user.mode == SshMode::RestrictedRsync && user.shell.is_some() {
                 debug!(
                     user = %user.name,
                     shell = ?user.shell,
@@ -1105,11 +1103,11 @@ mod tests {
     fn ssh_shell_override_interactive_mode() {
         let mut spec = minimal_spec(AppType::SshBastion);
         spec.app_config = Some(AppConfig::SshBastion(SshBastionConfig {
-            mode: SshMode::Shell,
             users: vec![SshUser {
                 name: "alice".into(),
                 uid: 1000,
                 gid: 1000,
+                mode: SshMode::Shell,
                 shell: Some("/bin/zsh".into()),
                 ..Default::default()
             }],
@@ -1124,11 +1122,11 @@ mod tests {
     fn ssh_shell_override_restricted_rsync() {
         let mut spec = minimal_spec(AppType::SshBastion);
         spec.app_config = Some(AppConfig::SshBastion(SshBastionConfig {
-            mode: SshMode::RestrictedRsync,
             users: vec![SshUser {
                 name: "bob".into(),
                 uid: 1001,
                 gid: 1001,
+                mode: SshMode::RestrictedRsync,
                 shell: Some("/bin/bash".into()),
                 ..Default::default()
             }],

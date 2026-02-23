@@ -105,10 +105,6 @@ pub struct SshBastionConfig {
     #[serde(default)]
     pub users: Vec<SshUser>,
 
-    /// SSH access mode: shell, sftp, scp, rsync, or restricted-rsync.
-    #[serde(default)]
-    pub mode: SshMode,
-
     /// Whether to allow password authentication (default: false).
     #[serde(default)]
     pub enable_password_auth: bool,
@@ -132,10 +128,6 @@ pub struct SshBastionConfig {
     /// SFTP chroot directory (default: "%h" for user home).
     #[serde(default = "default_sftp_chroot")]
     pub sftp_chroot: String,
-
-    /// Restricted rsync configuration (only applies when mode is RestrictedRsync).
-    #[serde(default)]
-    pub restricted_rsync: Option<RestrictedRsyncConfig>,
 }
 
 fn default_sftp_chroot() -> String {
@@ -152,7 +144,13 @@ pub struct SshUser {
     pub uid: i64,
     /// Group ID.
     pub gid: i64,
-    /// Override login shell (default derives from mode).
+    /// SSH access mode for this user: shell, sftp, scp, rsync, or restricted-rsync.
+    #[serde(default)]
+    pub mode: SshMode,
+    /// Restricted rsync configuration (only applies when mode is restricted-rsync).
+    #[serde(default)]
+    pub restricted_rsync: Option<RestrictedRsyncConfig>,
+    /// Override login shell (only applies when mode is shell; default: /bin/sh).
     #[serde(default)]
     pub shell: Option<String>,
     /// SSH public keys (one per line).

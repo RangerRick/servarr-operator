@@ -219,10 +219,9 @@ fn test_pvc_ssh_bastion_shell_mode_creates_home_pvcs() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: String::new() },
-                    SshUser { name: "bob".into(), uid: 1002, gid: 1002, shell: None, public_keys: String::new() },
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: String::new() },
+                    SshUser { name: "bob".into(), uid: 1002, gid: 1002, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: String::new() },
                 ],
                 ..Default::default()
             })),
@@ -256,9 +255,8 @@ fn test_pvc_ssh_bastion_non_shell_mode_no_home_pvcs() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Sftp,
                 users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: String::new() },
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Sftp, restricted_rsync: None, shell: None, public_keys: String::new() },
                 ],
                 ..Default::default()
             })),
@@ -286,9 +284,8 @@ fn test_deployment_ssh_bastion_shell_mode_home_mounts() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, shell: None, public_keys: "ssh-ed25519 AAAA".into() },
+                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: "ssh-ed25519 AAAA".into() },
                 ],
                 ..Default::default()
             })),
@@ -748,6 +745,8 @@ fn test_secret_ssh_app_users_with_empty_keys_returns_none() {
                     name: "alice".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: String::new(),
                 }],
@@ -778,6 +777,8 @@ fn test_secret_ssh_app_valid_users_returns_secret() {
                         name: "alice".into(),
                         uid: 1000,
                         gid: 1000,
+                        mode: SshMode::Shell,
+                        restricted_rsync: None,
                         shell: None,
                         public_keys: "ssh-ed25519 AAAA alice@host".into(),
                     },
@@ -785,6 +786,8 @@ fn test_secret_ssh_app_valid_users_returns_secret() {
                         name: "bob".into(),
                         uid: 1001,
                         gid: 1001,
+                        mode: SshMode::Shell,
+                        restricted_rsync: None,
                         shell: None,
                         public_keys: "ssh-rsa BBBB bob@host".into(),
                     },
@@ -1263,14 +1266,14 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::RestrictedRsync,
-                restricted_rsync: Some(RestrictedRsyncConfig {
-                    allowed_paths: vec!["/data/backups".into(), "/media".into()],
-                }),
                 users: vec![SshUser {
                     name: "backup".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::RestrictedRsync,
+                    restricted_rsync: Some(RestrictedRsyncConfig {
+                        allowed_paths: vec!["/data/backups".into(), "/media".into()],
+                    }),
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
@@ -1288,8 +1291,8 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
     );
     let cm = cm.unwrap();
     let data = cm.data.unwrap();
-    assert!(data.contains_key("restricted-rsync.sh"));
-    let script = &data["restricted-rsync.sh"];
+    assert!(data.contains_key("restricted-rsync-backup.sh"));
+    let script = &data["restricted-rsync-backup.sh"];
     assert!(script.contains("/data/backups"));
     assert!(script.contains("/media"));
     assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
@@ -1309,11 +1312,12 @@ fn test_configmap_ssh_bastion_rsync_mode_produces_configmap() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Rsync,
                 users: vec![SshUser {
                     name: "backup".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Rsync,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
@@ -1326,7 +1330,7 @@ fn test_configmap_ssh_bastion_rsync_mode_produces_configmap() {
 
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
     assert!(cm.is_some(), "SshMode::Rsync should produce a restricted-rsync ConfigMap");
-    let script = &cm.unwrap().data.unwrap()["restricted-rsync.sh"];
+    let script = &cm.unwrap().data.unwrap()["restricted-rsync-backup.sh"];
     assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
     // No allowed paths configured — ALLOWED_PATHS array must be empty
     assert!(
@@ -1357,7 +1361,6 @@ fn test_configmap_ssh_bastion_interactive_mode_returns_none() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![],
                 ..Default::default()
             })),
@@ -1369,7 +1372,7 @@ fn test_configmap_ssh_bastion_interactive_mode_returns_none() {
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
     assert!(
         cm.is_none(),
-        "SSH bastion in Shell mode should return None for restricted-rsync"
+        "SSH bastion with no rsync-mode users should return None for restricted-rsync"
     );
 }
 
@@ -1548,17 +1551,17 @@ fn test_deployment_ssh_bastion_init_containers() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::RestrictedRsync,
                 users: vec![SshUser {
                     name: "backup".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::RestrictedRsync,
+                    restricted_rsync: Some(RestrictedRsyncConfig {
+                        allowed_paths: vec!["/data".into()],
+                    }),
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
-                restricted_rsync: Some(RestrictedRsyncConfig {
-                    allowed_paths: vec!["/data".into()],
-                }),
                 ..Default::default()
             })),
             ..Default::default()
@@ -1642,11 +1645,12 @@ fn test_deployment_ssh_bastion_rsync_mode_uses_restricted_rsync() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Rsync,
                 users: vec![SshUser {
                     name: "backup".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Rsync,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
@@ -1677,8 +1681,8 @@ fn test_deployment_ssh_bastion_rsync_mode_uses_restricted_rsync() {
     let env = container.env.as_ref().unwrap();
     let ssh_users = env.iter().find(|e| e.name == "SSH_USERS").unwrap();
     assert!(
-        ssh_users.value.as_deref().unwrap_or("").contains("/usr/local/bin/restricted-rsync"),
-        "SshMode::Rsync user shell must be /usr/local/bin/restricted-rsync"
+        ssh_users.value.as_deref().unwrap_or("").contains("/usr/local/bin/restricted-rsync-backup"),
+        "SshMode::Rsync user shell must be /usr/local/bin/restricted-rsync-backup"
     );
 }
 
@@ -1695,11 +1699,12 @@ fn test_deployment_ssh_bastion_shell_package_installed() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![SshUser {
                     name: "alice".into(),
                     uid: 1001,
                     gid: 1001,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
                     shell: Some("/bin/bash".into()),
                     public_keys: String::new(),
                 }],
@@ -1732,11 +1737,12 @@ fn test_deployment_ssh_bastion_default_shell_no_install() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![SshUser {
                     name: "bob".into(),
                     uid: 1002,
                     gid: 1002,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: String::new(),
                 }],
@@ -2073,7 +2079,6 @@ fn test_networkpolicy_ssh_bastion_ingress() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![],
                 ..Default::default()
             })),
@@ -2306,7 +2311,6 @@ fn test_networkpolicy_ssh_bastion_nfs_egress() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![],
                 ..Default::default()
             })),
@@ -2723,11 +2727,12 @@ fn test_deployment_ssh_bastion_advanced_env_vars() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![SshUser {
                     name: "admin".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
@@ -2773,11 +2778,12 @@ fn test_deployment_ssh_bastion_managed_env_ignored() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Shell,
                 users: vec![SshUser {
                     name: "user1".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],
@@ -2855,11 +2861,12 @@ fn test_deployment_ssh_bastion_host_keys_preserved_with_nfs_mounts() {
                 ],
             }),
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                mode: SshMode::Sftp,
                 users: vec![SshUser {
                     name: "admin".into(),
                     uid: 1000,
                     gid: 1000,
+                    mode: SshMode::Sftp,
+                    restricted_rsync: None,
                     shell: None,
                     public_keys: "ssh-ed25519 AAAA".into(),
                 }],

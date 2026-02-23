@@ -249,32 +249,26 @@ spec:
       # Automated media cleanup.  Gets /movies and /tv auto-injected.
 
     - app: SshBastion
-      # Read-only rsync access for automated backups.
-      # Gets /movies, /tv, and /music auto-injected.
+      # Per-user access modes. Gets /movies, /tv, and /music auto-injected.
       appConfig:
         sshBastion:
-          mode: restricted-rsync
-          restrictedRsync:
-            allowedPaths:
-              - /movies
-              - /tv
-              - /music
           users:
-            - name: backup
-              uid: 1000
-              gid: 1000
-              publicKeys: |
-                ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... backup@nas
-
-    - app: SshBastion
-      # Interactive shell for manual file management.
-      # Gets /movies, /tv, and /music auto-injected.
-      appConfig:
-        sshBastion:
-          mode: shell
-          users:
+            # Interactive shell for manual file management.
             - name: mediaadmin
               uid: 1000
               gid: 1000
+              mode: shell
               publicKeys: |
                 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... mediaadmin@workstation
+            # Read-only rsync access for automated backups.
+            - name: backup
+              uid: 1001
+              gid: 1001
+              mode: restricted-rsync
+              restrictedRsync:
+                allowedPaths:
+                  - /movies
+                  - /tv
+                  - /music
+              publicKeys: |
+                ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... backup@nas

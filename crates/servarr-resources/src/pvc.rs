@@ -27,8 +27,8 @@ pub fn build_all(app: &ServarrApp) -> Vec<PersistentVolumeClaim> {
     // Shell mode: one read-write PVC per user for persistent ~/.ssh state
     // (known_hosts, config, identity files).
     if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
-        if sc.mode == SshMode::Shell {
-            for user in &sc.users {
+        for user in &sc.users {
+            if user.mode == SshMode::Shell {
                 pvcs.push(build_ssh_home_pvc(app, &user.name));
             }
         }

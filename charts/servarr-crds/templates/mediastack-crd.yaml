@@ -261,31 +261,10 @@ spec:
                               default: false
                               description: 'Whether to allow gateway ports (default: false).'
                               type: boolean
-                            mode:
-                              default: shell
-                              description: 'SSH access mode: shell, sftp, scp, rsync, or restricted-rsync.'
-                              enum:
-                              - shell
-                              - sftp
-                              - scp
-                              - rsync
-                              - restricted-rsync
-                              type: string
                             motd:
                               default: ''
                               description: Message of the day shown on login.
                               type: string
-                            restrictedRsync:
-                              description: Restricted rsync configuration (only applies when mode is RestrictedRsync).
-                              nullable: true
-                              properties:
-                                allowedPaths:
-                                  default: []
-                                  description: Paths that users are allowed to rsync from.
-                                  items:
-                                    type: string
-                                  type: array
-                              type: object
                             sftpChroot:
                               default: '%h'
                               description: 'SFTP chroot directory (default: "%h" for user home).'
@@ -304,6 +283,16 @@ spec:
                                     description: Group ID.
                                     format: int64
                                     type: integer
+                                  mode:
+                                    default: shell
+                                    description: 'SSH access mode for this user: shell, sftp, scp, rsync, or restricted-rsync.'
+                                    enum:
+                                    - shell
+                                    - sftp
+                                    - scp
+                                    - rsync
+                                    - restricted-rsync
+                                    type: string
                                   name:
                                     description: Username.
                                     type: string
@@ -311,8 +300,19 @@ spec:
                                     default: ''
                                     description: SSH public keys (one per line).
                                     type: string
+                                  restrictedRsync:
+                                    description: Restricted rsync configuration (only applies when mode is restricted-rsync).
+                                    nullable: true
+                                    properties:
+                                      allowedPaths:
+                                        default: []
+                                        description: Paths that users are allowed to rsync from.
+                                        items:
+                                          type: string
+                                        type: array
+                                    type: object
                                   shell:
-                                    description: Override login shell (default derives from mode).
+                                    description: 'Override login shell (only applies when mode is shell; default: /bin/sh).'
                                     nullable: true
                                     type: string
                                   uid:
@@ -1362,8 +1362,9 @@ spec:
                   externalPath:
                     default: /
                     description: |-
-                      Root path on the external NFS server. Defaults to "/". The media path fields
-                      (`moviesPath`, `tvPath`, etc.) are relative to this root.
+                      Root export path on the external NFS server. Defaults to "/". The media
+                      subpath fields (`moviesPath`, `tvPath`, etc.) are appended to this root
+                      to form the NFS server-side path (e.g. `/volume1` + `/movies` = `/volume1/movies`).
                     type: string
                   externalServer:
                     description: |-
@@ -1393,16 +1394,26 @@ spec:
                   movies4kPath:
                     default: /movies-4k
                     description: |-
-                      Path inside the NFS share for 4K movies (used when split4k is enabled).
-                      Defaults to "/movies-4k".
+                      Subpath for 4K movies (used when split4k is enabled). Defaults to "/movies-4k".
+                      The 4K Radarr instance mounts this path at the same container path as the
+                      standard instance (`moviesPath`), so app configuration is unchanged.
                     type: string
                   moviesPath:
                     default: /movies
-                    description: Path inside the NFS share where movies are stored. Defaults to "/movies".
+                    description: |-
+                      Subpath within the NFS share for movies, and the container mount path.
+                      Defaults to "/movies".
+
+                      For in-cluster NFS the server-side path equals `moviesPath` (the
+                      in-cluster export root is `/nfsshare` with `fsid=0`, so `/movies` is
+                      the full server path).
+                      For external NFS the server-side path is `{externalPath}{moviesPath}`.
                     type: string
                   musicPath:
                     default: /music
-                    description: Path inside the NFS share where music is stored. Defaults to "/music".
+                    description: |-
+                      Subpath within the NFS share for music, and the container mount path.
+                      Defaults to "/music".
                     type: string
                   storageClass:
                     description: Storage class for the NFS server PVC. If omitted, uses the cluster default.
@@ -1415,12 +1426,15 @@ spec:
                   tv4kPath:
                     default: /tv-4k
                     description: |-
-                      Path inside the NFS share for 4K TV shows (used when split4k is enabled).
-                      Defaults to "/tv-4k".
+                      Subpath for 4K TV shows (used when split4k is enabled). Defaults to "/tv-4k".
+                      The 4K Sonarr instance mounts this at the same container path as the standard
+                      instance (`tvPath`), so app configuration is unchanged.
                     type: string
                   tvPath:
                     default: /tv
-                    description: Path inside the NFS share where TV shows are stored. Defaults to "/tv".
+                    description: |-
+                      Subpath within the NFS share for TV shows, and the container mount path.
+                      Defaults to "/tv".
                     type: string
                 type: object
             required:
@@ -1437,7 +1451,9 @@ spec:
                       type: string
                     bypassed:
                       default: false
-                      description: True when this app's tier was advanced past due to timeout; cleared once the app becomes ready.
+                      description: |-
+                        True when this app's tier was advanced past without the app becoming
+                        ready (tier rollout timeout elapsed).  Cleared once the app is ready.
                       type: boolean
                     enabled:
                       default: false
@@ -1506,7 +1522,9 @@ spec:
                 format: int32
                 type: integer
               tierBlockedSince:
-                description: RFC 3339 timestamp of when the current tier first became blocked. Reset when the tier advances.
+                description: |-
+                  RFC 3339 timestamp of when the current tier first became blocked.
+                  Reset when the tier advances. Used to enforce the tier rollout timeout.
                 nullable: true
                 type: string
               totalApps:
