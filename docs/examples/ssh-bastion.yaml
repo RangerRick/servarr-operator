@@ -1,7 +1,56 @@
-# SSH jump host for utility access
+# SSH bastion — restricted rsync (default)
+# Read-only rsync access limited to specific paths. Rsync is always read-only.
 apiVersion: servarr.dev/v1alpha1
 kind: ServarrApp
 metadata:
-  name: ssh-bastion
+  name: ssh-bastion-rsync
 spec:
   app: SshBastion
+  appConfig:
+    sshBastion:
+      mode: restricted-rsync
+      restrictedRsync:
+        allowedPaths:
+          - /mnt/media
+      users:
+        - name: alice
+          uid: 1000
+          gid: 1000
+          publicKeys: |
+            ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample alice@example.com
+---
+# SSH bastion — SCP only
+# Read-only file transfers via SCP. No shell, no rsync.
+apiVersion: servarr.dev/v1alpha1
+kind: ServarrApp
+metadata:
+  name: ssh-bastion-scp
+spec:
+  app: SshBastion
+  appConfig:
+    sshBastion:
+      mode: scp
+      users:
+        - name: alice
+          uid: 1000
+          gid: 1000
+          publicKeys: |
+            ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample alice@example.com
+---
+# SSH bastion — interactive shell
+# Full shell access. Use when users need to run commands on the host.
+apiVersion: servarr.dev/v1alpha1
+kind: ServarrApp
+metadata:
+  name: ssh-bastion-shell
+spec:
+  app: SshBastion
+  appConfig:
+    sshBastion:
+      mode: shell
+      users:
+        - name: alice
+          uid: 1000
+          gid: 1000
+          publicKeys: |
+            ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample alice@example.com
