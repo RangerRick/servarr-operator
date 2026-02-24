@@ -6,7 +6,7 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Secret, Service};
 use k8s_openapi::api::networking::v1::NetworkPolicy;
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder};
 use kube::runtime::watcher;
@@ -317,6 +317,10 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
             .map_err(Error::Kube)?;
     }
 
+    // Auto-create API key Secret if apiKeySecret is set and the Secret is absent.
+    // Uses a get-then-create pattern so an existing key is never overwritten.
+    ensure_api_key_secret(client, &app, &ns).await?;
+
     // Build and apply SSH bastion authorized-keys Secret
     if let Some(secret) = servarr_resources::secret::build_authorized_keys(&app) {
         let secret_name = secret.metadata.name.as_deref().unwrap_or(&name);
@@ -472,6 +476,46 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         .map_err(Error::Kube)?;
 
     Ok(Action::requeue(Duration::from_secs(300)))
+}
+
+/// Create the API key Secret the first time `apiKeySecret` is reconciled.
+///
+/// A random 32-byte (64-char hex) key is generated and stored as `api-key`
+/// in the Secret.  For .NET-based apps (Sonarr, Radarr, Lidarr, Prowlarr)
+/// the deployment builder injects the value as the `APP__AUTH__APIKEY` env
+/// var so the app uses the operator-managed key from first startup.
+///
+/// The Secret is owned by the ServarrApp so it is garbage-collected when the
+/// ServarrApp is deleted.  An existing Secret is never touched.
+async fn ensure_api_key_secret(client: &Client, app: &ServarrApp, ns: &str) -> Result<(), Error> {
+    let secret_name = match app.spec.api_key_secret.as_deref() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    let secret_api = Api::<Secret>::namespaced(client.clone(), ns);
+
+    // Only create if the Secret does not already exist.
+    if secret_api.get(secret_name).await.is_ok() {
+        return Ok(());
+    }
+
+    use rand::Rng as _;
+    let key: String = rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+
+    if let Some(secret) = servarr_resources::secret::build_api_key(app, &key) {
+        info!(name = %app.name_any(), secret = %secret_name, "creating api-key secret");
+        secret_api
+            .create(&PostParams::default(), &secret)
+            .await
+            .map_err(Error::Kube)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn check_api_health(
@@ -1790,6 +1834,18 @@ fn chrono_now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// Return true if `v` is a Kubernetes zero/default value that the API server
+/// omits when serialising resources (false, 0, "", null).  A field absent from
+/// `actual` but present as a zero value in `desired` is not real drift.
+fn is_zero_value(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Bool(false) | serde_json::Value::Null => true,
+        serde_json::Value::Number(n) => n.as_i64() == Some(0) || n.as_f64() == Some(0.0),
+        serde_json::Value::String(s) => s.is_empty(),
+        _ => false,
+    }
+}
+
 /// Return paths where `desired` differs from `actual` for debugging drift.
 fn json_diff_paths(
     desired: &serde_json::Value,
@@ -1808,6 +1864,8 @@ fn json_diff_paths(
                 };
                 match a.get(k) {
                     Some(av) => json_diff_paths(dv, av, p),
+                    // Kubernetes omits zero-value fields; treat as non-diff.
+                    None if is_zero_value(dv) => vec![],
                     None => vec![format!("{p}: missing in actual")],
                 }
             })
@@ -1828,12 +1886,15 @@ fn json_diff_paths(
 
 /// Check that every field in `desired` exists with the same value in `actual`.
 /// Extra fields in `actual` (e.g. Kubernetes defaults) are ignored.
+/// Fields absent from `actual` but present as zero values in `desired` are
+/// not considered drift — Kubernetes omits zero-value fields on read.
 fn json_is_subset(desired: &serde_json::Value, actual: &serde_json::Value) -> bool {
     use serde_json::Value;
     match (desired, actual) {
-        (Value::Object(d), Value::Object(a)) => d
-            .iter()
-            .all(|(k, dv)| a.get(k).is_some_and(|av| json_is_subset(dv, av))),
+        (Value::Object(d), Value::Object(a)) => d.iter().all(|(k, dv)| match a.get(k) {
+            Some(av) => json_is_subset(dv, av),
+            None => is_zero_value(dv),
+        }),
         (Value::Array(d), Value::Array(a)) => {
             d.len() == a.len()
                 && d.iter()
@@ -1870,6 +1931,27 @@ mod tests {
     #[test]
     fn json_is_subset_missing_key_in_actual() {
         assert!(!json_is_subset(&json!({"a": 1}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_missing_false_bool_not_drift() {
+        // Kubernetes omits readOnly:false from actual; desired=false must not trigger drift.
+        assert!(json_is_subset(&json!({"readOnly": false}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_missing_true_bool_is_drift() {
+        assert!(!json_is_subset(&json!({"readOnly": true}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_missing_zero_int_not_drift() {
+        assert!(json_is_subset(&json!({"port": 0}), &json!({})));
+    }
+
+    #[test]
+    fn json_is_subset_missing_nonzero_int_is_drift() {
+        assert!(!json_is_subset(&json!({"port": 8080}), &json!({})));
     }
 
     #[test]

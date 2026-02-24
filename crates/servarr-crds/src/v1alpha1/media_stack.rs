@@ -28,6 +28,13 @@ use super::types::*;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MediaStackSpec {
+    /// In-cluster NFS server configuration. When omitted or `enabled: true`, the
+    /// operator deploys an NFS server and auto-injects media mounts into every app.
+    /// Set `enabled: false` to opt out entirely, or set `externalServer` to use
+    /// your own NFS.
+    #[serde(default)]
+    pub nfs: Option<NfsServerSpec>,
+
     /// Shared defaults applied to every app in the stack. Per-app fields
     /// override these values.
     #[serde(default)]
@@ -189,11 +196,16 @@ impl StackApp {
     /// When `split4k` is `Some(true)`, produces a base instance and a 4K instance.
     /// The 4K instance has `instance: Some("4k")` and applies any `split4k_overrides`.
     ///
+    /// When `nfs` is provided, NFS media mounts are auto-injected into each spec
+    /// based on app type. 4K instances receive the 4K-specific path variants.
+    ///
     /// Returns `Err` if `split4k` is set on an unsupported app type.
     pub fn expand(
         &self,
         stack_name: &str,
+        stack_namespace: &str,
         defaults: Option<&StackDefaults>,
+        nfs: Option<&NfsServerSpec>,
     ) -> Result<Vec<(String, ServarrAppSpec)>, String> {
         if self.split4k == Some(true) && !self.split4k_valid() {
             return Err(format!(
@@ -203,7 +215,8 @@ impl StackApp {
         }
 
         let base_name = self.child_name(stack_name);
-        let base_spec = self.to_servarr_spec(defaults);
+        let mut base_spec = self.to_servarr_spec(defaults);
+        inject_nfs_mounts(&mut base_spec, nfs, false, stack_name, stack_namespace);
         let mut result = vec![(base_name, base_spec)];
 
         if self.split4k == Some(true) {
@@ -236,7 +249,8 @@ impl StackApp {
                 }
             }
 
-            let four_k_spec = four_k_app.to_servarr_spec(defaults);
+            let mut four_k_spec = four_k_app.to_servarr_spec(defaults);
+            inject_nfs_mounts(&mut four_k_spec, nfs, true, stack_name, stack_namespace);
             result.push((four_k_name, four_k_spec));
         }
 
@@ -291,6 +305,102 @@ impl StackApp {
     }
 }
 
+/// Inject auto-generated NFS mounts into a resolved app spec.
+///
+/// Mounts are inserted into `spec.persistence` using the additive NFS merge
+/// strategy — user-provided mounts with the same name take precedence.
+///
+/// `is_4k` routes Sonarr and Radarr to their 4K path variants so the
+/// standard and 4K instances see the same container path (`/tv`, `/movies`)
+/// while pointing to separate directories on the NFS server.
+fn inject_nfs_mounts(
+    spec: &mut ServarrAppSpec,
+    nfs: Option<&NfsServerSpec>,
+    is_4k: bool,
+    stack_name: &str,
+    stack_namespace: &str,
+) {
+    let Some(nfs) = nfs else { return };
+    let Some(server) = nfs.server_address(stack_name, stack_namespace) else {
+        return;
+    };
+
+    // `server_path` is the NFS server-side export path; `mount_path` is the
+    // container path. For 4K Sonarr/Radarr instances the server path points
+    // to the 4K folder while the container still sees the standard path
+    // (/tv, /movies) so app config is identical across standard and 4K instances.
+    let make = |name: &str, server_path: &str, mount_path: &str| NfsMount {
+        name: name.to_string(),
+        server: server.clone(),
+        path: nfs.nfs_path(server_path),
+        mount_path: mount_path.to_string(),
+        read_only: false,
+    };
+
+    let mounts: Vec<NfsMount> = match &spec.app {
+        AppType::Sonarr => {
+            let nfs_path = if is_4k { &nfs.tv_4k_path } else { &nfs.tv_path };
+            vec![make("tv", nfs_path, &nfs.tv_path.clone())]
+        }
+        AppType::Radarr => {
+            let nfs_path = if is_4k {
+                &nfs.movies_4k_path
+            } else {
+                &nfs.movies_path
+            };
+            vec![make("movies", nfs_path, &nfs.movies_path.clone())]
+        }
+        AppType::Lidarr => vec![make("music", &nfs.music_path, &nfs.music_path.clone())],
+        AppType::Sabnzbd | AppType::Transmission => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+            make("music", &nfs.music_path, &nfs.music_path.clone()),
+            make(
+                "movies-4k",
+                &nfs.movies_4k_path,
+                &nfs.movies_4k_path.clone(),
+            ),
+            make("tv-4k", &nfs.tv_4k_path, &nfs.tv_4k_path.clone()),
+        ],
+        AppType::Plex | AppType::Jellyfin => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+            make("music", &nfs.music_path, &nfs.music_path.clone()),
+            make(
+                "movies-4k",
+                &nfs.movies_4k_path,
+                &nfs.movies_4k_path.clone(),
+            ),
+            make("tv-4k", &nfs.tv_4k_path, &nfs.tv_4k_path.clone()),
+        ],
+        AppType::Maintainerr => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+        ],
+        AppType::SshBastion => vec![
+            make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
+            make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
+            make("music", &nfs.music_path, &nfs.music_path.clone()),
+        ],
+        _ => return,
+    };
+
+    if mounts.is_empty() {
+        return;
+    }
+
+    // Merge: auto-injected mounts are the base layer; user-specified mounts
+    // (from the resolved spec) take precedence by name.
+    let injected = PersistenceSpec {
+        volumes: Vec::new(),
+        nfs_mounts: mounts,
+    };
+    spec.persistence = Some(match spec.persistence.take() {
+        None => injected,
+        Some(user) => injected.merge_with(&user),
+    });
+}
+
 /// Merge env vars: stack defaults first, per-app overrides same-name entries.
 fn merge_env(defaults: &[EnvVar], overrides: &[EnvVar]) -> Vec<EnvVar> {
     use indexmap::IndexMap;
@@ -316,30 +426,7 @@ fn merge_persistence(
         (None, None) => None,
         (None, Some(a)) => Some(a.clone()),
         (Some(d), None) => Some(d.clone()),
-        (Some(d), Some(a)) => {
-            // PVC volumes: per-app replaces entirely if non-empty
-            let volumes = if a.volumes.is_empty() {
-                d.volumes.clone()
-            } else {
-                a.volumes.clone()
-            };
-
-            // NFS mounts: additive, deduplicated by name (per-app wins)
-            use indexmap::IndexMap;
-            let mut nfs_map: IndexMap<String, NfsMount> = IndexMap::new();
-            for m in &d.nfs_mounts {
-                nfs_map.insert(m.name.clone(), m.clone());
-            }
-            for m in &a.nfs_mounts {
-                nfs_map.insert(m.name.clone(), m.clone());
-            }
-            let nfs_mounts: Vec<NfsMount> = nfs_map.into_values().collect();
-
-            Some(PersistenceSpec {
-                volumes,
-                nfs_mounts,
-            })
-        }
+        (Some(d), Some(a)) => Some(d.merge_with(a)),
     }
 }
 
@@ -383,6 +470,10 @@ pub struct MediaStackStatus {
     pub conditions: Vec<Condition>,
     #[serde(default)]
     pub observed_generation: i64,
+    /// RFC 3339 timestamp of when the current tier first became blocked.
+    /// Reset when the tier advances. Used to enforce the tier rollout timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_blocked_since: Option<String>,
 }
 
 impl MediaStackStatus {
@@ -425,6 +516,10 @@ pub struct StackAppStatus {
     pub name: String,
     pub app_type: String,
     pub tier: u8,
+    /// True when this app's tier was advanced past without the app becoming
+    /// ready (tier rollout timeout elapsed).  Cleared once the app is ready.
+    #[serde(default)]
+    pub bypassed: bool,
     #[serde(default)]
     pub ready: bool,
     #[serde(default)]

@@ -21,6 +21,52 @@ watchAllNamespaces: false
 nodeSelector: {}
 tolerations: []
 
+# Node Feature Discovery (NFD) subchart.
+# Set nfd.enabled=true to install NFD alongside the operator in a single helm install.
+# NFD labels each node with detected hardware features (CPUs, GPUs, PCIe devices, kernel
+# modules), enabling GPU-aware scheduling for apps like Jellyfin and Plex.
+#
+# Standalone install (without this chart):
+#   helm install nfd oci://registry.k8s.io/nfd/charts/node-feature-discovery \
+#     --namespace node-feature-discovery --create-namespace --version 0.18.3
+#
+# All node-feature-discovery chart values can be passed under the nfd key, e.g.:
+#   nfd:
+#     enabled: true
+#     worker:
+#       config:
+#         sources:
+#           pci:
+#             deviceClassWhitelist: ["0300", "0302"]
+nfd:
+  enabled: false
+  # gpuRules: when true (and nfd.enabled=true), installs NodeFeatureRule CRs that
+  # translate raw PCI/module NFD labels into semantic GPU labels:
+  #   gpu.intel.com/i915=true, gpu.nvidia.com/present=true, gpu.amd.com/present=true
+  gpuRules:
+    enabled: false
+  worker:
+    config:
+      sources:
+        pci:
+          # Detect display controllers (0x03xx) and 3D controllers (0x0302).
+          # deviceLabelFields: [class, vendor] produces labels of the form
+          # feature.node.kubernetes.io/pci-<class>_<vendor>.present
+          deviceClassWhitelist:
+            - "03"
+            - "0302"
+          deviceLabelFields:
+            - class
+            - vendor
+        kernel:
+          # Detect loaded kernel modules for GPU drivers.
+          # Labels: feature.node.kubernetes.io/kernel-loadedmodule.<module>
+          loadedModules:
+            - i915      # Intel Gen 9+ (Skylake–Arrow Lake)
+            - xe        # Intel Gen 12.5+ (Meteor Lake, Lunar Lake)
+            - nvidia    # NVIDIA proprietary
+            - amdgpu    # AMD open-source
+
 # Default container images for managed apps.
 # AUTO-GENERATED from image-defaults.toml — edit that file instead.
 # Regenerate with: scripts/sync-image-defaults.sh

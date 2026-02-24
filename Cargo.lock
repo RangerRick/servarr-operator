@@ -2616,6 +2616,7 @@ dependencies = [
  "lazy_static",
  "overseerr",
  "prometheus",
+ "rand",
  "serde",
  "serde_json",
  "serde_yaml",

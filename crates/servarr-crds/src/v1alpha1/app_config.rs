@@ -93,7 +93,7 @@ pub struct TransmissionAuth {
 }
 
 fn json_object_schema(_gen: &mut SchemaGenerator) -> Schema {
-    json_schema!({ "type": "object" })
+    json_schema!({ "type": "object", "x-kubernetes-preserve-unknown-fields": true })
 }
 
 // --- SSH Bastion ---
@@ -104,10 +104,6 @@ pub struct SshBastionConfig {
     /// SSH users to provision on the bastion.
     #[serde(default)]
     pub users: Vec<SshUser>,
-
-    /// SSH access mode: shell, sftp, scp, rsync, or restricted-rsync.
-    #[serde(default)]
-    pub mode: SshMode,
 
     /// Whether to allow password authentication (default: false).
     #[serde(default)]
@@ -132,10 +128,6 @@ pub struct SshBastionConfig {
     /// SFTP chroot directory (default: "%h" for user home).
     #[serde(default = "default_sftp_chroot")]
     pub sftp_chroot: String,
-
-    /// Restricted rsync configuration (only applies when mode is RestrictedRsync).
-    #[serde(default)]
-    pub restricted_rsync: Option<RestrictedRsyncConfig>,
 }
 
 fn default_sftp_chroot() -> String {
@@ -152,7 +144,13 @@ pub struct SshUser {
     pub uid: i64,
     /// Group ID.
     pub gid: i64,
-    /// Override login shell (default derives from mode).
+    /// SSH access mode for this user: shell, sftp, scp, rsync, or restricted-rsync.
+    #[serde(default)]
+    pub mode: SshMode,
+    /// Restricted rsync configuration (only applies when mode is restricted-rsync).
+    #[serde(default)]
+    pub restricted_rsync: Option<RestrictedRsyncConfig>,
+    /// Override login shell (only applies when mode is shell; default: /bin/sh).
     #[serde(default)]
     pub shell: Option<String>,
     /// SSH public keys (one per line).
@@ -184,13 +182,6 @@ pub struct RestrictedRsyncConfig {
     /// Paths that users are allowed to rsync from.
     #[serde(default)]
     pub allowed_paths: Vec<String>,
-    /// Whether to enforce read-only mode (default: true).
-    #[serde(default = "default_readonly")]
-    pub read_only: bool,
-}
-
-fn default_readonly() -> bool {
-    true
 }
 
 // --- Overseerr ---

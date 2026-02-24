@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,34 @@ pub struct PersistenceSpec {
     pub volumes: Vec<PvcVolume>,
     #[serde(default)]
     pub nfs_mounts: Vec<NfsMount>,
+}
+
+impl PersistenceSpec {
+    /// Merge `self` (base layer) with `over` (higher-priority layer).
+    ///
+    /// - PVC volumes: `over.volumes` replaces entirely when non-empty; base
+    ///   volumes are used when `over.volumes` is empty.
+    /// - NFS mounts: additive, deduplicated by name (`over` wins on conflict).
+    pub fn merge_with(&self, over: &PersistenceSpec) -> PersistenceSpec {
+        let volumes = if over.volumes.is_empty() {
+            self.volumes.clone()
+        } else {
+            over.volumes.clone()
+        };
+
+        let mut nfs_map: IndexMap<String, NfsMount> = IndexMap::new();
+        for m in &self.nfs_mounts {
+            nfs_map.insert(m.name.clone(), m.clone());
+        }
+        for m in &over.nfs_mounts {
+            nfs_map.insert(m.name.clone(), m.clone());
+        }
+
+        PersistenceSpec {
+            volumes,
+            nfs_mounts: nfs_map.into_values().collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
@@ -477,6 +506,170 @@ impl Default for OverseerrSyncSpec {
             auto_remove: true,
         }
     }
+}
+
+/// Configuration for the in-cluster NFS server deployed by the MediaStack operator.
+///
+/// By default (when this field is absent or `enabled` is true), the operator
+/// deploys an in-cluster NFS server backed by a PVC and auto-injects NFS mounts
+/// into every app in the stack.
+///
+/// Set `enabled: false` to disable the in-cluster server entirely, or set
+/// `externalServer` to use your own NFS server instead of deploying one.
+/// Setting `externalServer` implicitly disables the in-cluster server.
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NfsServerSpec {
+    /// Deploy an in-cluster NFS server. Defaults to true. Ignored when
+    /// `externalServer` is set.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Size of the PVC backing the in-cluster NFS server. Defaults to "1Ti".
+    #[serde(default = "default_nfs_storage_size")]
+    pub storage_size: String,
+
+    /// Storage class for the NFS server PVC. If omitted, uses the cluster default.
+    #[serde(default)]
+    pub storage_class: Option<String>,
+
+    /// Image override for the NFS server container.
+    #[serde(default)]
+    pub image: Option<ImageSpec>,
+
+    /// Subpath within the NFS share for movies, and the container mount path.
+    /// Defaults to "/movies".
+    ///
+    /// For in-cluster NFS the server-side path equals `moviesPath` (the
+    /// in-cluster export root is `/nfsshare` with `fsid=0`, so `/movies` is
+    /// the full server path).
+    /// For external NFS the server-side path is `{externalPath}{moviesPath}`.
+    #[serde(default = "default_movies_path")]
+    pub movies_path: String,
+
+    /// Subpath within the NFS share for TV shows, and the container mount path.
+    /// Defaults to "/tv".
+    #[serde(default = "default_tv_path")]
+    pub tv_path: String,
+
+    /// Subpath within the NFS share for music, and the container mount path.
+    /// Defaults to "/music".
+    #[serde(default = "default_music_path")]
+    pub music_path: String,
+
+    /// Subpath for 4K movies (used when split4k is enabled). Defaults to "/movies-4k".
+    /// The 4K Radarr instance mounts this path at the same container path as the
+    /// standard instance (`moviesPath`), so app configuration is unchanged.
+    #[serde(default = "default_movies_4k_path")]
+    pub movies_4k_path: String,
+
+    /// Subpath for 4K TV shows (used when split4k is enabled). Defaults to "/tv-4k".
+    /// The 4K Sonarr instance mounts this at the same container path as the standard
+    /// instance (`tvPath`), so app configuration is unchanged.
+    #[serde(default = "default_tv_4k_path")]
+    pub tv_4k_path: String,
+
+    /// Address of an external NFS server to use instead of deploying one in-cluster.
+    /// When set, no NFS server resources are created and this address is used for
+    /// all auto-injected NFS mounts. Mutually exclusive with `enabled: true`.
+    #[serde(default)]
+    pub external_server: Option<String>,
+
+    /// Root export path on the external NFS server. Defaults to "/". The media
+    /// subpath fields (`moviesPath`, `tvPath`, etc.) are appended to this root
+    /// to form the NFS server-side path (e.g. `/volume1` + `/movies` = `/volume1/movies`).
+    #[serde(default = "default_external_path")]
+    pub external_path: String,
+}
+
+impl Default for NfsServerSpec {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            storage_size: default_nfs_storage_size(),
+            storage_class: None,
+            image: None,
+            movies_path: default_movies_path(),
+            tv_path: default_tv_path(),
+            music_path: default_music_path(),
+            movies_4k_path: default_movies_4k_path(),
+            tv_4k_path: default_tv_4k_path(),
+            external_server: None,
+            external_path: default_external_path(),
+        }
+    }
+}
+
+impl NfsServerSpec {
+    /// Returns true if an in-cluster NFS server should be deployed.
+    pub fn deploy_in_cluster(&self) -> bool {
+        self.external_server.is_none() && self.enabled
+    }
+
+    /// Returns the NFS server address to use in volume mounts.
+    ///
+    /// For in-cluster servers, provide `stack_name` and `namespace` to derive
+    /// the cluster-local DNS name. For external servers, returns the configured
+    /// `external_server` address.
+    pub fn server_address(&self, stack_name: &str, namespace: &str) -> Option<String> {
+        if let Some(ref ext) = self.external_server {
+            Some(ext.clone())
+        } else if self.enabled {
+            Some(format!(
+                "{stack_name}-nfs-server.{namespace}.svc.cluster.local"
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Compute the NFS server-side path for a given media subpath.
+    ///
+    /// For in-cluster servers `/nfsshare` is the NFSv4 root (`fsid=0`), so
+    /// clients mount paths relative to it: `nfs_path("/movies")` → `"/movies"`.
+    ///
+    /// For external servers the export root is `external_path`, so
+    /// `nfs_path("/movies")` with `external_path="/volume1"` → `"/volume1/movies"`.
+    pub fn nfs_path(&self, media_subpath: &str) -> String {
+        if self.external_server.is_some() {
+            let root = self.external_path.trim_end_matches('/');
+            if root.is_empty() || root == "/" {
+                media_subpath.to_string()
+            } else {
+                format!("{root}{media_subpath}")
+            }
+        } else {
+            media_subpath.to_string()
+        }
+    }
+}
+
+fn default_nfs_storage_size() -> String {
+    "1Ti".to_string()
+}
+
+fn default_movies_path() -> String {
+    "/movies".to_string()
+}
+
+fn default_tv_path() -> String {
+    "/tv".to_string()
+}
+
+fn default_music_path() -> String {
+    "/music".to_string()
+}
+
+fn default_movies_4k_path() -> String {
+    "/movies-4k".to_string()
+}
+
+fn default_tv_4k_path() -> String {
+    "/tv-4k".to_string()
+}
+
+fn default_external_path() -> String {
+    "/".to_string()
 }
 
 fn json_object_schema(_gen: &mut SchemaGenerator) -> Schema {

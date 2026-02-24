@@ -256,35 +256,10 @@ spec:
                         default: false
                         description: 'Whether to allow gateway ports (default: false).'
                         type: boolean
-                      mode:
-                        default: shell
-                        description: 'SSH access mode: shell, sftp, scp, rsync, or restricted-rsync.'
-                        enum:
-                        - shell
-                        - sftp
-                        - scp
-                        - rsync
-                        - restricted-rsync
-                        type: string
                       motd:
                         default: ''
                         description: Message of the day shown on login.
                         type: string
-                      restrictedRsync:
-                        description: Restricted rsync configuration (only applies when mode is RestrictedRsync).
-                        nullable: true
-                        properties:
-                          allowedPaths:
-                            default: []
-                            description: Paths that users are allowed to rsync from.
-                            items:
-                              type: string
-                            type: array
-                          readOnly:
-                            default: true
-                            description: 'Whether to enforce read-only mode (default: true).'
-                            type: boolean
-                        type: object
                       sftpChroot:
                         default: '%h'
                         description: 'SFTP chroot directory (default: "%h" for user home).'
@@ -303,6 +278,16 @@ spec:
                               description: Group ID.
                               format: int64
                               type: integer
+                            mode:
+                              default: shell
+                              description: 'SSH access mode for this user: shell, sftp, scp, rsync, or restricted-rsync.'
+                              enum:
+                              - shell
+                              - sftp
+                              - scp
+                              - rsync
+                              - restricted-rsync
+                              type: string
                             name:
                               description: Username.
                               type: string
@@ -310,8 +295,19 @@ spec:
                               default: ''
                               description: SSH public keys (one per line).
                               type: string
+                            restrictedRsync:
+                              description: Restricted rsync configuration (only applies when mode is restricted-rsync).
+                              nullable: true
+                              properties:
+                                allowedPaths:
+                                  default: []
+                                  description: Paths that users are allowed to rsync from.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
                             shell:
-                              description: Override login shell (default derives from mode).
+                              description: 'Override login shell (only applies when mode is shell; default: /bin/sh).'
                               nullable: true
                               type: string
                             uid:
@@ -360,6 +356,7 @@ spec:
                         type: object
                       settings:
                         type: object
+                        x-kubernetes-preserve-unknown-fields: true
                     type: object
                 type: object
               backup:

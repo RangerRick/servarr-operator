@@ -4,6 +4,7 @@ pub mod configmap;
 pub mod deployment;
 pub mod httproute;
 pub mod networkpolicy;
+pub mod nfs_server;
 pub mod pvc;
 pub mod secret;
 pub mod service;

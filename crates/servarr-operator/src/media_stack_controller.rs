@@ -1,9 +1,12 @@
+use chrono;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
 use futures::StreamExt;
-use kube::api::{Api, ListParams, Patch, PatchParams};
+use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::core::v1::{Pod, Service};
+use kube::api::{Api, DeleteParams, ListParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher;
 use kube::{Client, CustomResourceExt, Resource, ResourceExt};
@@ -21,6 +24,7 @@ use crate::metrics::{
 };
 
 const FIELD_MANAGER: &str = "servarr-operator-stack";
+const TIER_TIMEOUT_SECS: i64 = 300; // 5 minutes
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -82,10 +86,29 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
 
     let defaults = stack.spec.defaults.as_ref();
 
+    // Reconcile in-cluster NFS server StatefulSet and Service.
+    // Returns the pod IP if the server is running (used below to bypass cluster DNS).
+    let nfs_pod_ip = reconcile_nfs_server(&stack, client, &name, &ns, &pp).await?;
+
+    // Build an effective NfsServerSpec: for in-cluster servers override the server
+    // address with the pod IP so the kubelet can resolve it without cluster DNS.
+    let nfs_override: Option<servarr_crds::NfsServerSpec>;
+    let effective_nfs = match (stack.spec.nfs.as_ref(), nfs_pod_ip) {
+        (Some(nfs), Some(ip)) if nfs.external_server.is_none() => {
+            nfs_override = Some(servarr_crds::NfsServerSpec {
+                external_server: Some(ip),
+                external_path: String::new(),
+                ..nfs.clone()
+            });
+            nfs_override.as_ref()
+        }
+        _ => stack.spec.nfs.as_ref(),
+    };
+
     // Collect enabled apps and expand split4k entries
     let mut expanded: Vec<(String, ServarrAppSpec, AppType, u8)> = Vec::new();
     for app in stack.spec.apps.iter().filter(|a| a.enabled) {
-        match app.expand(&name, defaults) {
+        match app.expand(&name, &ns, defaults, effective_nfs) {
             Ok(pairs) => {
                 for (child_name, spec) in pairs {
                     let tier = app.app.tier();
@@ -149,20 +172,64 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
     let mut current_tier: Option<u8> = None;
     let mut all_previous_ready = true;
 
+    // Previous-reconcile state needed for tier timeout logic.
+    let prev_current_tier = stack.status.as_ref().and_then(|s| s.current_tier);
+    let prev_tier_blocked_since = stack
+        .status
+        .as_ref()
+        .and_then(|s| s.tier_blocked_since.clone());
+    let prev_bypassed: HashSet<String> = stack
+        .status
+        .as_ref()
+        .map(|s| {
+            s.app_statuses
+                .iter()
+                .filter(|a| a.bypassed)
+                .map(|a| a.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Iterate tiers in order
     for (&tier, apps) in &tiers {
         if tier > 0 && !all_previous_ready {
-            // Previous tier not ready — record not-ready statuses and skip
-            for (child_name, _, app_type) in apps {
-                app_statuses.push(StackAppStatus {
-                    name: child_name.clone(),
-                    app_type: app_type.as_str().to_string(),
-                    tier,
-                    ready: false,
-                    enabled: true,
+            // Check if we should advance past this block due to timeout.
+            let timed_out = prev_tier_blocked_since
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .is_some_and(|since| {
+                    use chrono::Utc;
+                    (Utc::now() - since.with_timezone(&Utc)).num_seconds() >= TIER_TIMEOUT_SECS
                 });
+
+            if !timed_out {
+                // Previous tier not ready and not timed out — skip.
+                for (child_name, _, app_type) in apps {
+                    app_statuses.push(StackAppStatus {
+                        name: child_name.clone(),
+                        app_type: app_type.as_str().to_string(),
+                        tier,
+                        ready: false,
+                        enabled: true,
+                        bypassed: false,
+                    });
+                }
+                continue;
             }
-            continue;
+
+            // Timeout elapsed: mark all currently-unready apps as bypassed so
+            // subsequent reconciles don't re-block on them.
+            warn!(
+                %name, tier,
+                timeout_secs = TIER_TIMEOUT_SECS,
+                "tier rollout timed out; advancing past unready apps"
+            );
+            for status in app_statuses.iter_mut() {
+                if !status.ready && !status.bypassed {
+                    status.bypassed = true;
+                }
+            }
+            all_previous_ready = true;
         }
 
         current_tier = Some(tier);
@@ -202,15 +269,18 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
                 .await
                 .map_err(Error::Kube)?;
 
-            // Read back child status
-            let is_ready = match sa_api.get(child_name).await {
+            // Read back child status.  Bypassed apps count as "ready" for tier
+            // advancement but the actual ready flag is preserved in status.
+            let was_bypassed = prev_bypassed.contains(child_name.as_str());
+            let actual_ready = match sa_api.get(child_name).await {
                 Ok(sa) => sa.status.as_ref().is_some_and(|s| s.ready),
                 Err(_) => false,
             };
 
-            if is_ready {
+            if actual_ready {
                 ready_count += 1;
-            } else {
+            }
+            if !actual_ready && !was_bypassed {
                 all_previous_ready = false;
             }
 
@@ -218,8 +288,10 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
                 name: child_name.clone(),
                 app_type: app_type.as_str().to_string(),
                 tier,
-                ready: is_ready,
+                ready: actual_ready,
                 enabled: true,
+                // Clear bypass once the app is actually ready.
+                bypassed: was_bypassed && !actual_ready,
             });
         }
     }
@@ -233,6 +305,7 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
                 tier: app.app.tier(),
                 ready: false,
                 enabled: false,
+                bypassed: false,
             });
         }
     }
@@ -274,6 +347,21 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
     };
 
     let now = chrono_now();
+
+    // Maintain tier_blocked_since: set when this tier first blocks, reset when
+    // the tier advances or all apps become ready.
+    let tier_blocked_since = if ready_count == total_apps {
+        None
+    } else if current_tier != prev_current_tier {
+        // Tier advanced — start a fresh timer for the new tier.
+        Some(now.clone())
+    } else if !all_previous_ready {
+        // Same tier, still blocked — preserve existing timer or start it.
+        prev_tier_blocked_since.or_else(|| Some(now.clone()))
+    } else {
+        None
+    };
+
     let mut status = MediaStackStatus {
         ready: phase == StackPhase::Ready,
         phase: phase.clone(),
@@ -283,6 +371,7 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
         app_statuses,
         conditions: Vec::new(),
         observed_generation: stack.metadata.generation.unwrap_or(0),
+        tier_blocked_since,
     };
 
     status.set_condition(Condition::ok("Valid", "Valid", "Spec is valid", &now));
@@ -357,6 +446,109 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
     };
 
     Ok(Action::requeue(requeue))
+}
+
+/// Apply (or clean up) the in-cluster NFS server StatefulSet and Service.
+///
+/// When `nfs.deploy_in_cluster()` is true, both resources are created/updated
+/// via server-side apply. When NFS is absent or external, any previously-created
+/// in-cluster resources are deleted so they don't linger.
+///
+/// Returns the NFS server pod IP if the pod is currently running, or `None`
+/// if the pod is not yet scheduled/running. Callers should use this IP directly
+/// instead of the service hostname because the kubelet mounts volumes from the
+/// host network namespace where cluster-internal DNS may not be available.
+async fn reconcile_nfs_server(
+    stack: &MediaStack,
+    client: &Client,
+    name: &str,
+    ns: &str,
+    pp: &PatchParams,
+) -> Result<Option<String>, Error> {
+    let nfs_name = format!("{name}-nfs-server");
+    let ss_api = Api::<StatefulSet>::namespaced(client.clone(), ns);
+    let svc_api = Api::<Service>::namespaced(client.clone(), ns);
+
+    let deploy = stack
+        .spec
+        .nfs
+        .as_ref()
+        .is_some_and(|n| n.deploy_in_cluster());
+
+    if deploy {
+        let nfs = stack.spec.nfs.as_ref().expect("checked above");
+        let owner_ref = stack
+            .controller_owner_ref(&())
+            .expect("stack should have UID");
+
+        let statefulset =
+            servarr_resources::nfs_server::build_statefulset(name, ns, nfs, owner_ref.clone());
+        let service = servarr_resources::nfs_server::build_service(name, ns, owner_ref);
+
+        ss_api
+            .patch(
+                &nfs_name,
+                pp,
+                &Patch::Apply(serde_json::to_value(&statefulset).map_err(Error::Serialization)?),
+            )
+            .await
+            .map_err(Error::Kube)?;
+
+        svc_api
+            .patch(
+                &nfs_name,
+                pp,
+                &Patch::Apply(serde_json::to_value(&service).map_err(Error::Serialization)?),
+            )
+            .await
+            .map_err(Error::Kube)?;
+
+        info!(%name, %ns, "applied NFS server StatefulSet and Service");
+
+        // Look up the pod IP of the running NFS server pod.  The kubelet mounts
+        // volumes from the host network namespace where cluster-internal DNS may
+        // not resolve.  Using the pod IP directly bypasses that limitation.
+        let pod_api = Api::<Pod>::namespaced(client.clone(), ns);
+        let pod_name = format!("{nfs_name}-0");
+        let pod_ip = pod_api
+            .get_opt(&pod_name)
+            .await
+            .map_err(Error::Kube)?
+            .and_then(|p| p.status?.pod_ip);
+
+        if let Some(ref ip) = pod_ip {
+            info!(%name, %ns, pod_ip = %ip, "NFS server pod IP resolved");
+        } else {
+            info!(%name, %ns, "NFS server pod not yet running; will retry");
+        }
+
+        return Ok(pod_ip);
+    }
+
+    // NFS disabled or external — remove any in-cluster resources.
+    for result in [
+        ss_api
+            .delete(&nfs_name, &DeleteParams::default())
+            .await
+            .map(|_| ()),
+        svc_api
+            .delete(&nfs_name, &DeleteParams::default())
+            .await
+            .map(|_| ()),
+    ] {
+        match result {
+            Err(e) if !is_not_found(&e) => {
+                warn!(%name, error = %e, "failed to delete NFS server resource");
+            }
+            _ => {}
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_not_found(e: &kube::Error) -> bool {
+    matches!(e, kube::Error::Api(e) if e.code == 404)
 }
 
 async fn patch_status(

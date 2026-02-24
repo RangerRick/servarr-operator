@@ -2,24 +2,57 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaim, PersistentVolumeClaimSpec, VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use servarr_crds::{AppDefaults, PvcVolume, ServarrApp};
+use servarr_crds::{AppConfig, AppDefaults, PersistenceSpec, PvcVolume, ServarrApp, SshMode};
 use std::collections::BTreeMap;
 
 use crate::common;
 
 pub fn build_all(app: &ServarrApp) -> Vec<PersistentVolumeClaim> {
     let defaults = AppDefaults::for_app(&app.spec.app);
-    let persistence = app
-        .spec
-        .persistence
-        .as_ref()
-        .unwrap_or(&defaults.persistence);
+    let merged: PersistenceSpec;
+    let persistence = match &app.spec.persistence {
+        None => &defaults.persistence,
+        Some(spec) => {
+            merged = defaults.persistence.merge_with(spec);
+            &merged
+        }
+    };
 
-    persistence
+    let mut pvcs: Vec<PersistentVolumeClaim> = persistence
         .volumes
         .iter()
         .map(|v| build_one(app, v))
-        .collect()
+        .collect();
+
+    // Shell mode: one read-write PVC per user for persistent ~/.ssh state
+    // (known_hosts, config, identity files).
+    if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
+        for user in &sc.users {
+            if user.mode == SshMode::Shell {
+                pvcs.push(build_ssh_home_pvc(app, &user.name));
+            }
+        }
+    }
+
+    pvcs
+}
+
+fn build_ssh_home_pvc(app: &ServarrApp, username: &str) -> PersistentVolumeClaim {
+    PersistentVolumeClaim {
+        metadata: common::metadata(app, &format!("ssh-home-{username}")),
+        spec: Some(PersistentVolumeClaimSpec {
+            access_modes: Some(vec!["ReadWriteOnce".into()]),
+            resources: Some(VolumeResourceRequirements {
+                requests: Some(BTreeMap::from([(
+                    "storage".into(),
+                    Quantity("10Mi".into()),
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }
 
 fn build_one(app: &ServarrApp, vol: &PvcVolume) -> PersistentVolumeClaim {

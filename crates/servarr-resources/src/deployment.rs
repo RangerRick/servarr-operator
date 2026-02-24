@@ -61,11 +61,17 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
     let security = app.spec.security.as_ref().unwrap_or(&defaults.security);
     let svc_spec = app.spec.service.as_ref().unwrap_or(&defaults.service);
     let resources = app.spec.resources.as_ref().unwrap_or(&defaults.resources);
-    let persistence = app
-        .spec
-        .persistence
-        .as_ref()
-        .unwrap_or(&defaults.persistence);
+    // Always merge the app-type default persistence with the spec so that
+    // app-type-specific PVCs (e.g. SshBastion's host-keys) are preserved even
+    // when a MediaStack injects NFS mounts via stack defaults.
+    let merged_persistence: PersistenceSpec;
+    let persistence = match &app.spec.persistence {
+        None => &defaults.persistence,
+        Some(spec) => {
+            merged_persistence = defaults.persistence.merge_with(spec);
+            &merged_persistence
+        }
+    };
     let probes = app.spec.probes.as_ref().unwrap_or(&defaults.probes);
     let uid = app.spec.uid.unwrap_or(defaults.uid);
     let gid = app.spec.gid.unwrap_or(defaults.gid);
@@ -123,15 +129,35 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
         ..Default::default()
     };
 
-    let mut init_containers = build_init_containers(app, &image, &container_security);
+    let mut init_containers = build_init_containers(app, &image, &container_security, uid, gid);
     if matches!(app.spec.app, AppType::SshBastion) {
         build_ssh_bastion_init_containers(&mut init_containers, app, &image, &container_security);
     }
+
+    // SshBastion: override the image CMD to tell sshd which port to listen on.
+    // panubo/sshd defaults to port 22 but operators configure port 2222 via
+    // the service spec.  Passing -p avoids mutating sshd_config inside the
+    // container, which would only take effect in that container's overlay layer.
+    let ssh_bastion_args: Option<Vec<String>> = if matches!(app.spec.app, AppType::SshBastion) {
+        let ssh_port = svc_spec.ports.first().map_or(22, |p| p.port);
+        Some(vec![
+            "/usr/sbin/sshd".into(),
+            "-D".into(),
+            "-e".into(),
+            "-f".into(),
+            "/etc/ssh/sshd_config".into(),
+            "-p".into(),
+            ssh_port.to_string(),
+        ])
+    } else {
+        None
+    };
 
     let container = Container {
         name: app.spec.app.to_string(),
         image: Some(image.clone()),
         image_pull_policy: Some(image_spec.pull_policy.clone()),
+        args: ssh_bastion_args,
         ports: Some(container_ports),
         env: Some(env_vars),
         volume_mounts: Some(volume_mounts),
@@ -164,10 +190,39 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
         );
     }
 
-    if let Some(scheduling) = &app.spec.scheduling
-        && !scheduling.node_selector.is_empty()
-    {
-        pod_spec.node_selector = Some(scheduling.node_selector.clone());
+    // Merge user-provided nodeSelector with GPU NFD selectors.
+    // GPU selectors match the semantic labels produced by the NodeFeatureRule CRs
+    // (gpu.intel.com/i915, gpu.nvidia.com/present, gpu.amd.com/present).
+    // nodeSelector uses AND semantics: all entries must match on the same node.
+    // This is intentional — requesting multiple GPU types is unusual and would
+    // require a node that has all of them loaded simultaneously.
+    let mut node_selector: std::collections::BTreeMap<String, String> = app
+        .spec
+        .scheduling
+        .as_ref()
+        .map(|s| s.node_selector.clone())
+        .unwrap_or_default();
+
+    if let Some(ref gpu) = app.spec.gpu {
+        if gpu.intel.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.intel.com/i915".into())
+                .or_insert("true".into());
+        }
+        if gpu.nvidia.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.nvidia.com/present".into())
+                .or_insert("true".into());
+        }
+        if gpu.amd.filter(|&n| n > 0).is_some() {
+            node_selector
+                .entry("gpu.amd.com/present".into())
+                .or_insert("true".into());
+        }
+    }
+
+    if !node_selector.is_empty() {
+        pod_spec.node_selector = Some(node_selector);
     }
 
     let strategy = if has_host_port {
@@ -300,7 +355,7 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
         mounts.push(VolumeMount {
             name: format!("nfs-{}", nfs.name),
             mount_path: nfs.mount_path.clone(),
-            read_only: Some(nfs.read_only),
+            read_only: nfs.read_only.then_some(true),
             ..Default::default()
         });
     }
@@ -329,27 +384,38 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
         });
     }
 
-    // SSH bastion: authorized keys per user + optional restricted-rsync script
+    // SSH bastion: mount the whole authorized-keys Secret as a read-only directory.
+    // panubo/sshd ≥1.10.0 has a bug: its `while read -d ''` loop exits with code 1
+    // (causing set -e to abort) when the last file it chmod's is not writable.
+    // Mounting the entire directory as read-only makes `[ -w /etc/authorized_keys ]`
+    // return false, causing entry.sh to skip the chmod block entirely.
     if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
+        if sc.users.iter().any(|u| !u.public_keys.is_empty()) {
+            mounts.push(VolumeMount {
+                name: "authorized-keys".into(),
+                mount_path: "/etc/authorized_keys".into(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
         for user in &sc.users {
-            if !user.public_keys.is_empty() {
+            if user.mode == SshMode::RestrictedRsync || user.mode == SshMode::Rsync {
                 mounts.push(VolumeMount {
-                    name: format!("authorized-keys-{}", user.name),
-                    mount_path: format!("/etc/authorized_keys/{}", user.name),
-                    sub_path: Some(user.name.clone()),
+                    name: "restricted-rsync".into(),
+                    mount_path: format!("/usr/local/bin/restricted-rsync-{}", user.name),
+                    sub_path: Some(format!("restricted-rsync-{}.sh", user.name)),
                     read_only: Some(true),
                     ..Default::default()
                 });
             }
-        }
-        if sc.mode == SshMode::RestrictedRsync {
-            mounts.push(VolumeMount {
-                name: "restricted-rsync".into(),
-                mount_path: "/usr/local/bin/restricted-rsync".into(),
-                sub_path: Some("restricted-rsync.sh".into()),
-                read_only: Some(true),
-                ..Default::default()
-            });
+            // Shell mode: per-user ~/.ssh PVC for persistent SSH client state
+            if user.mode == SshMode::Shell {
+                mounts.push(VolumeMount {
+                    name: format!("ssh-home-{}", user.name),
+                    mount_path: format!("/home/{}/.ssh", user.name),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -376,7 +442,7 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
             nfs: Some(NFSVolumeSource {
                 server: nfs.server.clone(),
                 path: nfs.path.clone(),
-                read_only: Some(nfs.read_only),
+                read_only: nfs.read_only.then_some(true),
             }),
             ..Default::default()
         });
@@ -463,29 +529,27 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
         });
     }
 
-    // SSH bastion: authorized-keys Secret (per user) + restricted-rsync ConfigMap
+    // SSH bastion: mount the whole authorized-keys Secret as a single directory volume
+    // (see build_volume_mounts for why we avoid per-user subPath mounts).
     if let Some(AppConfig::SshBastion(ref sc)) = app.spec.app_config {
         use k8s_openapi::api::core::v1::SecretVolumeSource;
         let secret_name = common::child_name(app, "authorized-keys");
-        for user in &sc.users {
-            if !user.public_keys.is_empty() {
-                volumes.push(Volume {
-                    name: format!("authorized-keys-{}", user.name),
-                    secret: Some(SecretVolumeSource {
-                        secret_name: Some(secret_name.clone()),
-                        items: Some(vec![k8s_openapi::api::core::v1::KeyToPath {
-                            key: user.name.clone(),
-                            path: user.name.clone(),
-                            mode: Some(0o444),
-                        }]),
-                        default_mode: Some(0o444),
-                        ..Default::default()
-                    }),
+        if sc.users.iter().any(|u| !u.public_keys.is_empty()) {
+            volumes.push(Volume {
+                name: "authorized-keys".into(),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(secret_name.clone()),
+                    default_mode: Some(0o444),
                     ..Default::default()
-                });
-            }
+                }),
+                ..Default::default()
+            });
         }
-        if sc.mode == SshMode::RestrictedRsync {
+        if sc
+            .users
+            .iter()
+            .any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync)
+        {
             volumes.push(Volume {
                 name: "restricted-rsync".into(),
                 config_map: Some(ConfigMapVolumeSource {
@@ -495,6 +559,19 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
                 }),
                 ..Default::default()
             });
+        }
+        // Shell mode: per-user ~/.ssh PVC volumes
+        for user in &sc.users {
+            if user.mode == SshMode::Shell {
+                volumes.push(Volume {
+                    name: format!("ssh-home-{}", user.name),
+                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                        claim_name: common::child_name(app, &format!("ssh-home-{}", user.name)),
+                        read_only: None,
+                    }),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -573,8 +650,8 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
             .iter()
             .map(|u| {
                 let shell = u.shell.clone().unwrap_or_else(|| {
-                    if sc.mode == SshMode::RestrictedRsync {
-                        "/usr/local/bin/restricted-rsync".to_string()
+                    if u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync {
+                        format!("/usr/local/bin/restricted-rsync-{}", u.name)
                     } else {
                         "/bin/sh".to_string()
                     }
@@ -627,6 +704,36 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
             env.push(EnvVar {
                 name: "MOTD".into(),
                 value: Some(sc.motd.clone()),
+                ..Default::default()
+            });
+        }
+    }
+
+    // .NET *arr app API key from Secret.
+    // Sonarr, Radarr, Lidarr, and Prowlarr all support setting their API key
+    // via the double-underscore ASP.NET Core env var override pattern.  When
+    // apiKeySecret is set the operator creates the Secret (if absent) and
+    // injects the value here so the app uses the operator-managed key from
+    // the moment it first starts.
+    if let Some(ref secret_name) = app.spec.api_key_secret {
+        let apikey_env = match app.spec.app {
+            AppType::Sonarr => Some("SONARR__AUTH__APIKEY"),
+            AppType::Radarr => Some("RADARR__AUTH__APIKEY"),
+            AppType::Lidarr => Some("LIDARR__AUTH__APIKEY"),
+            AppType::Prowlarr => Some("PROWLARR__AUTH__APIKEY"),
+            _ => None,
+        };
+        if let Some(env_name) = apikey_env {
+            env.push(EnvVar {
+                name: env_name.into(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: secret_name.clone(),
+                        key: "api-key".into(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             });
         }
@@ -767,6 +874,18 @@ fn build_security_contexts(
     }
 }
 
+/// Map a shell binary path to its Alpine apk package name.
+/// Returns `None` for the default `/bin/sh` (already present in Alpine) and for
+/// unknown paths (let the user handle those manually).
+fn shell_to_apk_package(shell: Option<&str>) -> Option<&'static str> {
+    match shell {
+        Some("/bin/bash") | Some("/usr/bin/bash") => Some("bash"),
+        Some("/bin/zsh") | Some("/usr/bin/zsh") => Some("zsh"),
+        Some("/bin/fish") | Some("/usr/bin/fish") | Some("/usr/local/bin/fish") => Some("fish"),
+        _ => None,
+    }
+}
+
 fn build_probe(config: &ProbeConfig, svc_spec: &ServiceSpec) -> Probe {
     let first_port = svc_spec
         .ports
@@ -821,16 +940,27 @@ fn build_init_containers(
     app: &ServarrApp,
     image: &str,
     security_context: &SecurityContext,
+    uid: i64,
+    gid: i64,
 ) -> Vec<Container> {
     let mut init = Vec::new();
 
     // Transmission settings apply init container
     if matches!(app.spec.app, AppType::Transmission) {
+        // Run as the app uid/gid explicitly.  The LinuxServer security profile drops
+        // DAC_OVERRIDE from capabilities, so even root cannot read files owned by
+        // another uid.  After a successful run the script chowns settings.json to
+        // uid:gid, so subsequent restarts must also run as uid to retain read access.
+        let init_sec = SecurityContext {
+            run_as_user: Some(uid),
+            run_as_group: Some(gid),
+            ..security_context.clone()
+        };
         init.push(Container {
             name: "apply-settings".into(),
             image: Some(image.to_string()),
             command: Some(vec!["/bin/sh".into(), "/scripts/apply-settings.sh".into()]),
-            security_context: Some(security_context.clone()),
+            security_context: Some(init_sec),
             volume_mounts: Some(vec![
                 VolumeMount {
                     name: "config".into(),
@@ -958,12 +1088,32 @@ fi
 "#,
     );
 
-    if ssh_config.mode == SshMode::RestrictedRsync {
+    if ssh_config
+        .users
+        .iter()
+        .any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync)
+    {
         patch_script.push_str(
-            r#"# Install rsync for restricted-rsync mode
+            r#"# Install rsync (required for rsync/restricted-rsync modes)
 apk add --no-cache rsync >/dev/null 2>&1 || true
 "#,
         );
+    }
+
+    // Collect any non-default shells requested by users and install their packages.
+    let shell_packages: Vec<&str> = ssh_config
+        .users
+        .iter()
+        .filter_map(|u| shell_to_apk_package(u.shell.as_deref()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if !shell_packages.is_empty() {
+        let pkgs = shell_packages.join(" ");
+        patch_script.push_str(&format!(
+            "# Install shells requested by users\napk add --no-cache {pkgs} >/dev/null 2>&1 || true\n"
+        ));
     }
 
     init.push(Container {
@@ -973,6 +1123,50 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
         security_context: Some(security_context.clone()),
         ..Default::default()
     });
+
+    // Shell mode: set up per-user ~/.ssh directories with correct ownership and permissions.
+    // The PVCs are mounted read-write; this init container initialises them on first boot
+    // and is idempotent on subsequent restarts.
+    let shell_users: Vec<_> = ssh_config
+        .users
+        .iter()
+        .filter(|u| u.mode == SshMode::Shell)
+        .collect();
+    if !shell_users.is_empty() {
+        let setup_cmds: String = shell_users
+            .iter()
+            .map(|u| {
+                format!(
+                    "mkdir -p /home/{name}/.ssh\nchown {uid}:{gid} /home/{name}/.ssh\nchmod 700 /home/{name}/.ssh",
+                    name = u.name,
+                    uid = u.uid,
+                    gid = u.gid,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let setup_script =
+            format!("#!/bin/sh\nset -e\n{setup_cmds}\necho 'SSH home dirs ready.'\n");
+
+        let setup_mounts: Vec<VolumeMount> = shell_users
+            .iter()
+            .map(|u| VolumeMount {
+                name: format!("ssh-home-{}", u.name),
+                mount_path: format!("/home/{}/.ssh", u.name),
+                ..Default::default()
+            })
+            .collect();
+
+        init.push(Container {
+            name: "setup-ssh-home".into(),
+            image: Some(image.to_string()),
+            command: Some(vec!["/bin/sh".into(), "-c".into(), setup_script]),
+            security_context: Some(security_context.clone()),
+            volume_mounts: Some(setup_mounts),
+            ..Default::default()
+        });
+    }
 }
 
 /// For Transmission with auth enabled, automatically switch to exec probes

@@ -33,7 +33,12 @@ jobs:
           cutoff="${CUTOFF}"
           package="servarr-operator"
 
-          # List all versions of the container package
+          # List all versions of the container package (skip if package doesn't exist yet)
+          if ! gh api "/user/packages/container/${package}" &>/dev/null; then
+            echo "Package ${package} not found, skipping"
+            exit 0
+          fi
+
           gh api --paginate \
             "/user/packages/container/${package}/versions" \
             --jq '.[] | select(.metadata.container.tags[]? | test("^nightly-[0-9]{8}$")) | {id: .id, tags: .metadata.container.tags}' \
@@ -66,6 +71,12 @@ jobs:
           for chart in servarr-crds servarr-operator; do
             # Helm OCI charts are stored under the "servarr" package namespace
             package="servarr%2F${chart}"
+
+            # Skip if the package doesn't exist yet
+            if ! gh api "/user/packages/container/${package}" &>/dev/null; then
+              echo "Package ${chart} not found, skipping"
+              continue
+            fi
 
             gh api --paginate \
               "/user/packages/container/${package}/versions" \
