@@ -1,4 +1,4 @@
-name: Nightly
+name: Snapshot
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: nightly-${{ github.ref }}
+  group: snapshot-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -23,12 +23,12 @@ jobs:
       date: ${{ steps.v.outputs.date }}
       chart-version: ${{ steps.v.outputs.chart_version }}
     steps:
-      - name: Compute nightly version
+      - name: Compute snapshot version
         id: v
         run: |
           date_stamp=$(date -u +%Y%m%d)
           echo "date=${date_stamp}" >> "$GITHUB_OUTPUT"
-          echo "chart_version=0.0.0-nightly.${date_stamp}" >> "$GITHUB_OUTPUT"
+          echo "chart_version=0.0.0-snapshot.${date_stamp}" >> "$GITHUB_OUTPUT"
 
   ci:
     uses: ./.github/workflows/_ci.yaml
@@ -41,8 +41,8 @@ jobs:
     uses: ./.github/workflows/_publish.yaml
     with:
       image-tags: |-
-        nightly
-        nightly-${{ needs.version.outputs.date }}
-      image-version-label: nightly-${{ needs.version.outputs.date }}
+        snapshot
+        snapshot-${{ needs.version.outputs.date }}
+      image-version-label: snapshot-${{ needs.version.outputs.date }}
       chart-version: ${{ needs.version.outputs.chart-version }}
-      chart-app-version: nightly-${{ needs.version.outputs.date }}
+      chart-app-version: snapshot-${{ needs.version.outputs.date }}

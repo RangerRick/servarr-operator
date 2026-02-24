@@ -1,4 +1,4 @@
-name: Cleanup Nightly
+name: Cleanup Snapshots
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  # Number of days to retain nightly builds before deletion.
+  # Number of days to retain snapshot builds before deletion.
   # Change this value to adjust the retention window.
   RETENTION_DAYS: 7
 
@@ -23,9 +23,9 @@ jobs:
         run: |
           cutoff=$(date -u -d "${RETENTION_DAYS} days ago" +%Y%m%d)
           echo "date=${cutoff}" >> "$GITHUB_OUTPUT"
-          echo "Deleting nightly versions older than ${cutoff} (${RETENTION_DAYS} days)"
+          echo "Deleting snapshot versions older than ${cutoff} (${RETENTION_DAYS} days)"
 
-      - name: Delete old nightly container image tags
+      - name: Delete old snapshot container image tags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CUTOFF: ${{ steps.cutoff.outputs.date }}
@@ -33,22 +33,21 @@ jobs:
           cutoff="${CUTOFF}"
           package="servarr-operator"
 
-          # List all versions of the container package (skip if package doesn't exist yet)
+          # Skip if the package doesn't exist yet
           if ! gh api "/user/packages/container/${package}" &>/dev/null; then
             echo "Package ${package} not found, skipping"
             exit 0
           fi
 
-          gh api --paginate \
-            "/user/packages/container/${package}/versions" \
-            --jq '.[] | select(.metadata.container.tags[]? | test("^nightly-[0-9]{8}$")) | {id: .id, tags: .metadata.container.tags}' \
-          | jq -c '.' | while read -r entry; do
+          gh api --paginate "/user/packages/container/${package}/versions" 2>/dev/null \
+          | jq -c '.[]? | select(.metadata.container.tags[]? | test("^snapshot-[0-9]{8}$")) | {id: .id, tags: .metadata.container.tags}' \
+          | while read -r entry; do
             version_id=$(echo "$entry" | jq -r '.id')
             tags=$(echo "$entry" | jq -r '.tags[]')
 
-            # Check if any nightly-YYYYMMDD tag is older than cutoff
+            # Check if any snapshot-YYYYMMDD tag is older than cutoff
             for tag in $tags; do
-              if [[ "$tag" =~ ^nightly-([0-9]{8})$ ]]; then
+              if [[ "$tag" =~ ^snapshot-([0-9]{8})$ ]]; then
                 tag_date="${BASH_REMATCH[1]}"
                 if [[ "$tag_date" < "$cutoff" ]]; then
                   echo "Deleting ${package} version ${version_id} (tag: ${tag})"
@@ -61,7 +60,7 @@ jobs:
             done
           done
 
-      - name: Delete old nightly Helm chart versions
+      - name: Delete old snapshot Helm chart versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CUTOFF: ${{ steps.cutoff.outputs.date }}
@@ -78,15 +77,14 @@ jobs:
               continue
             fi
 
-            gh api --paginate \
-              "/user/packages/container/${package}/versions" \
-              --jq '.[] | {id: .id, tags: .metadata.container.tags}' \
-            | jq -c '.' | while read -r entry; do
+            gh api --paginate "/user/packages/container/${package}/versions" 2>/dev/null \
+            | jq -c '.[]? | {id: .id, tags: .metadata.container.tags}' \
+            | while read -r entry; do
               version_id=$(echo "$entry" | jq -r '.id')
               tags=$(echo "$entry" | jq -r '.tags[]')
 
               for tag in $tags; do
-                if [[ "$tag" =~ ^0\.0\.0-nightly\.([0-9]{8})$ ]]; then
+                if [[ "$tag" =~ ^0\.0\.0-snapshot\.([0-9]{8})$ ]]; then
                   tag_date="${BASH_REMATCH[1]}"
                   if [[ "$tag_date" < "$cutoff" ]]; then
                     echo "Deleting ${chart} version ${version_id} (tag: ${tag})"

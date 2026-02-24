@@ -120,7 +120,7 @@ which mode the operator runs in.
 ## Release Channels
 
 The operator is published to `ghcr.io` in two channels: stable releases and
-nightly builds.
+snapshot builds.
 
 ### Stable Releases
 
@@ -141,33 +141,33 @@ helm install servarr-operator \
 
 Omitting `--version` installs the latest stable release.
 
-### Nightly Builds
+### Snapshot Builds
 
-Every push to `main` publishes a nightly build. Container images are tagged
-`nightly` (floating) and `nightly-YYYYMMDD` (date-stamped). Helm charts use
-version `0.0.0-nightly.YYYYMMDD`.
+Every push to `main` publishes a snapshot build. Container images are tagged
+`snapshot` (floating) and `snapshot-YYYYMMDD` (date-stamped). Helm charts use
+version `0.0.0-snapshot.YYYYMMDD`.
 
 ```bash
-# Install the latest nightly
+# Install the latest snapshot
 helm install servarr-crds \
   oci://ghcr.io/rangerrick/servarr/servarr-crds \
-  --version 0.0.0-nightly.20260219
+  --version 0.0.0-snapshot.20260219
 
 helm install servarr-operator \
   oci://ghcr.io/rangerrick/servarr/servarr-operator \
   --namespace servarr \
-  --version 0.0.0-nightly.20260219
+  --version 0.0.0-snapshot.20260219
 ```
 
 To use the container image directly without Helm:
 
 ```bash
-docker pull ghcr.io/rangerrick/servarr-operator:nightly
+docker pull ghcr.io/rangerrick/servarr-operator:snapshot
 # or a specific date:
-docker pull ghcr.io/rangerrick/servarr-operator:nightly-20260219
+docker pull ghcr.io/rangerrick/servarr-operator:snapshot-20260219
 ```
 
-Nightly builds older than 7 days are automatically cleaned up.
+Snapshot builds older than 7 days are automatically cleaned up.
 
 ## Helm Values Reference
 
