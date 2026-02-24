@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  # contents: write is required because the publish job calls _publish.yaml,
+  # which declares permissions: contents: write. GitHub requires the calling
+  # workflow's top-level permissions to allow what the reusable workflow declares.
+  # The version and ci jobs only use contents: read in practice.
+  contents: write # zizmor: ignore[excessive-permissions]
 
 jobs:
   version:
