@@ -68,6 +68,7 @@ jobs:
         run: |
           helm lint charts/servarr-crds/ --set operatorNamespace=servarr
           helm lint charts/servarr-operator/
+          helm dependency build charts/servarr-operator/
           helm template test charts/servarr-crds/ --set operatorNamespace=servarr > /dev/null
           helm template test charts/servarr-crds/ --set webhook.enabled=false > /dev/null
           helm template test charts/servarr-operator/ > /dev/null

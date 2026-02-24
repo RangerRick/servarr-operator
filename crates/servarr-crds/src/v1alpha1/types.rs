@@ -642,7 +642,6 @@ impl NfsServerSpec {
             media_subpath.to_string()
         }
     }
-
 }
 
 fn default_nfs_storage_size() -> String {

@@ -343,7 +343,11 @@ fn inject_nfs_mounts(
             vec![make("tv", nfs_path, &nfs.tv_path.clone())]
         }
         AppType::Radarr => {
-            let nfs_path = if is_4k { &nfs.movies_4k_path } else { &nfs.movies_path };
+            let nfs_path = if is_4k {
+                &nfs.movies_4k_path
+            } else {
+                &nfs.movies_path
+            };
             vec![make("movies", nfs_path, &nfs.movies_path.clone())]
         }
         AppType::Lidarr => vec![make("music", &nfs.music_path, &nfs.music_path.clone())],
@@ -351,14 +355,22 @@ fn inject_nfs_mounts(
             make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
             make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
             make("music", &nfs.music_path, &nfs.music_path.clone()),
-            make("movies-4k", &nfs.movies_4k_path, &nfs.movies_4k_path.clone()),
+            make(
+                "movies-4k",
+                &nfs.movies_4k_path,
+                &nfs.movies_4k_path.clone(),
+            ),
             make("tv-4k", &nfs.tv_4k_path, &nfs.tv_4k_path.clone()),
         ],
         AppType::Plex | AppType::Jellyfin => vec![
             make("movies", &nfs.movies_path, &nfs.movies_path.clone()),
             make("tv", &nfs.tv_path, &nfs.tv_path.clone()),
             make("music", &nfs.music_path, &nfs.music_path.clone()),
-            make("movies-4k", &nfs.movies_4k_path, &nfs.movies_4k_path.clone()),
+            make(
+                "movies-4k",
+                &nfs.movies_4k_path,
+                &nfs.movies_4k_path.clone(),
+            ),
             make("tv-4k", &nfs.tv_4k_path, &nfs.tv_4k_path.clone()),
         ],
         AppType::Maintainerr => vec![

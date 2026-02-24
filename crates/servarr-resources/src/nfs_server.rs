@@ -1,7 +1,7 @@
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PodSpec, PodTemplateSpec, SecurityContext, VolumeMount, VolumeResourceRequirements,
+    Container, ContainerPort, EnvVar, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec,
+    PodTemplateSpec, SecurityContext, VolumeMount, VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
@@ -24,8 +24,7 @@ const EXPORT_DIR: &str = "/nfsshare";
 // clients fall back to NFSv3 which needs portmapper — unavailable on Docker
 // Desktop.  With fsid=0 clients mount server:/movies and the server resolves
 // it relative to /nfsshare.
-const EXPORT_OPTS: &str =
-    "*(rw,async,no_subtree_check,no_auth_nlm,insecure,no_root_squash,fsid=0)";
+const EXPORT_OPTS: &str = "*(rw,async,no_subtree_check,no_auth_nlm,insecure,no_root_squash,fsid=0)";
 const DATA_VOLUME: &str = "data";
 
 fn resource_name(stack_name: &str) -> String {
@@ -209,11 +208,7 @@ pub fn build_statefulset(
 ///
 /// Other pods reach the NFS server via the cluster-local DNS name
 /// `{stack-name}-nfs-server.{namespace}.svc.cluster.local` on port 2049.
-pub fn build_service(
-    stack_name: &str,
-    namespace: &str,
-    owner_ref: OwnerReference,
-) -> Service {
+pub fn build_service(stack_name: &str, namespace: &str, owner_ref: OwnerReference) -> Service {
     let name = resource_name(stack_name);
 
     Service {

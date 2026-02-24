@@ -669,7 +669,9 @@ fn test_expand_with_stack_defaults() {
     let mut app = minimal_stack_app(AppType::Sonarr);
     app.split4k = Some(true);
 
-    let result = app.expand("media", "default", Some(&defaults), None).unwrap();
+    let result = app
+        .expand("media", "default", Some(&defaults), None)
+        .unwrap();
     assert_eq!(result.len(), 2);
 
     // Both instances inherit defaults
@@ -863,7 +865,10 @@ fn test_nfs_inject_sonarr_gets_tv_mount() {
     let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
     assert_eq!(mounts.len(), 1);
     assert_eq!(mounts[0].name, "tv");
-    assert_eq!(mounts[0].server, "mystack-nfs-server.media.svc.cluster.local");
+    assert_eq!(
+        mounts[0].server,
+        "mystack-nfs-server.media.svc.cluster.local"
+    );
     assert_eq!(mounts[0].path, "/tv");
     assert_eq!(mounts[0].mount_path, "/tv");
 }
@@ -939,7 +944,10 @@ fn test_nfs_inject_user_mounts_preserved_by_name() {
     let (_, spec) = &result[0];
     let mounts = &spec.persistence.as_ref().unwrap().nfs_mounts;
     assert_eq!(mounts.len(), 1);
-    assert_eq!(mounts[0].server, "my-custom-server", "user mount should win");
+    assert_eq!(
+        mounts[0].server, "my-custom-server",
+        "user mount should win"
+    );
     assert_eq!(mounts[0].path, "/custom/tv");
     assert!(mounts[0].read_only);
 }
@@ -965,8 +973,7 @@ fn test_nfs_inject_disabled_produces_no_mounts() {
     let result = app.expand("mystack", "media", None, Some(&nfs)).unwrap();
     let (_, spec) = &result[0];
     assert!(
-        spec.persistence.is_none()
-            || spec.persistence.as_ref().unwrap().nfs_mounts.is_empty(),
+        spec.persistence.is_none() || spec.persistence.as_ref().unwrap().nfs_mounts.is_empty(),
         "disabled NFS should produce no mounts"
     );
 }
@@ -1046,7 +1053,10 @@ fn test_nfs_inject_split4k_user_override_via_split4k_overrides() {
     let (_, k4_spec) = &result[1];
     let k4_mounts = &k4_spec.persistence.as_ref().unwrap().nfs_mounts;
     let tv_mount = k4_mounts.iter().find(|m| m.name == "tv").unwrap();
-    assert_eq!(tv_mount.server, "custom-override-server", "override should win");
+    assert_eq!(
+        tv_mount.server, "custom-override-server",
+        "override should win"
+    );
     assert_eq!(tv_mount.path, "/override/tv-4k");
 }
 
@@ -1061,7 +1071,10 @@ fn test_nfs_inject_maintainerr_gets_movies_and_tv() {
     assert!(names.contains(&"movies"), "expected movies mount");
     assert!(names.contains(&"tv"), "expected tv mount");
     assert_eq!(mounts.len(), 2);
-    assert_eq!(mounts[0].server, "mystack-nfs-server.media.svc.cluster.local");
+    assert_eq!(
+        mounts[0].server,
+        "mystack-nfs-server.media.svc.cluster.local"
+    );
     assert_eq!(mounts[0].path, "/movies");
 }
 

@@ -2327,10 +2327,7 @@ async fn mount_child_app_mocks(mock_server: &MockServer, stack_name: &str, ns: &
         .and(path(format!(
             "/apis/servarr.dev/v1alpha1/namespaces/{ns}/mediastacks/{stack_name}/status"
         )))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(mediastack_response(stack_name, ns)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(mediastack_response(stack_name, ns)))
         .named("patch-stack-status")
         .mount(mock_server)
         .await;
@@ -2357,7 +2354,11 @@ async fn test_media_stack_nfs_in_cluster_creates_statefulset_and_service() {
     let client = mock_client(&mock_server.uri()).await;
     let ctx = test_context(client);
 
-    let stack = Arc::new(make_nfs_stack("nfs-test", "test", Some(NfsServerSpec::default())));
+    let stack = Arc::new(make_nfs_stack(
+        "nfs-test",
+        "test",
+        Some(NfsServerSpec::default()),
+    ));
 
     // Expect PATCH for NFS StatefulSet
     Mock::given(method("PATCH"))
@@ -2385,9 +2386,7 @@ async fn test_media_stack_nfs_in_cluster_creates_statefulset_and_service() {
 
     // Expect GET for NFS server pod IP lookup (pod not yet running → 404)
     Mock::given(method("GET"))
-        .and(path(
-            "/api/v1/namespaces/test/pods/nfs-test-nfs-server-0",
-        ))
+        .and(path("/api/v1/namespaces/test/pods/nfs-test-nfs-server-0"))
         .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
             "apiVersion": "v1",
             "kind": "Status",

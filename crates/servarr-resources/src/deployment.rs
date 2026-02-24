@@ -138,24 +138,20 @@ pub fn build(app: &ServarrApp, image_overrides: &HashMap<String, ImageSpec>) -> 
     // panubo/sshd defaults to port 22 but operators configure port 2222 via
     // the service spec.  Passing -p avoids mutating sshd_config inside the
     // container, which would only take effect in that container's overlay layer.
-    let ssh_bastion_args: Option<Vec<String>> =
-        if matches!(app.spec.app, AppType::SshBastion) {
-            let ssh_port = svc_spec
-                .ports
-                .first()
-                .map_or(22, |p| p.port);
-            Some(vec![
-                "/usr/sbin/sshd".into(),
-                "-D".into(),
-                "-e".into(),
-                "-f".into(),
-                "/etc/ssh/sshd_config".into(),
-                "-p".into(),
-                ssh_port.to_string(),
-            ])
-        } else {
-            None
-        };
+    let ssh_bastion_args: Option<Vec<String>> = if matches!(app.spec.app, AppType::SshBastion) {
+        let ssh_port = svc_spec.ports.first().map_or(22, |p| p.port);
+        Some(vec![
+            "/usr/sbin/sshd".into(),
+            "-D".into(),
+            "-e".into(),
+            "-f".into(),
+            "/etc/ssh/sshd_config".into(),
+            "-p".into(),
+            ssh_port.to_string(),
+        ])
+    } else {
+        None
+    };
 
     let container = Container {
         name: app.spec.app.to_string(),
@@ -549,7 +545,11 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
                 ..Default::default()
             });
         }
-        if sc.users.iter().any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync) {
+        if sc
+            .users
+            .iter()
+            .any(|u| u.mode == SshMode::RestrictedRsync || u.mode == SshMode::Rsync)
+        {
             volumes.push(Volume {
                 name: "restricted-rsync".into(),
                 config_map: Some(ConfigMapVolumeSource {
@@ -1146,7 +1146,8 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
             .collect::<Vec<_>>()
             .join("\n");
 
-        let setup_script = format!("#!/bin/sh\nset -e\n{setup_cmds}\necho 'SSH home dirs ready.'\n");
+        let setup_script =
+            format!("#!/bin/sh\nset -e\n{setup_cmds}\necho 'SSH home dirs ready.'\n");
 
         let setup_mounts: Vec<VolumeMount> = shell_users
             .iter()

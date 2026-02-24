@@ -220,8 +220,24 @@ fn test_pvc_ssh_bastion_shell_mode_creates_home_pvcs() {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
                 users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: String::new() },
-                    SshUser { name: "bob".into(), uid: 1002, gid: 1002, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: String::new() },
+                    SshUser {
+                        name: "alice".into(),
+                        uid: 1001,
+                        gid: 1001,
+                        mode: SshMode::Shell,
+                        restricted_rsync: None,
+                        shell: None,
+                        public_keys: String::new(),
+                    },
+                    SshUser {
+                        name: "bob".into(),
+                        uid: 1002,
+                        gid: 1002,
+                        mode: SshMode::Shell,
+                        restricted_rsync: None,
+                        shell: None,
+                        public_keys: String::new(),
+                    },
                 ],
                 ..Default::default()
             })),
@@ -233,13 +249,27 @@ fn test_pvc_ssh_bastion_shell_mode_creates_home_pvcs() {
     let pvcs = servarr_resources::pvc::build_all(&app);
 
     // host-keys PVC from app defaults + one per user
-    assert!(pvcs.iter().any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice")));
-    assert!(pvcs.iter().any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-bob")));
+    assert!(
+        pvcs.iter()
+            .any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice"))
+    );
+    assert!(
+        pvcs.iter()
+            .any(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-bob"))
+    );
 
-    let alice_pvc = pvcs.iter().find(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice")).unwrap();
+    let alice_pvc = pvcs
+        .iter()
+        .find(|p| p.metadata.name.as_deref() == Some("bastion-ssh-home-alice"))
+        .unwrap();
     let spec = alice_pvc.spec.as_ref().unwrap();
-    assert_eq!(spec.access_modes.as_deref(), Some(&["ReadWriteOnce".to_string()][..]));
-    let storage = spec.resources.as_ref().unwrap().requests.as_ref().unwrap()["storage"].0.as_str();
+    assert_eq!(
+        spec.access_modes.as_deref(),
+        Some(&["ReadWriteOnce".to_string()][..])
+    );
+    let storage = spec.resources.as_ref().unwrap().requests.as_ref().unwrap()["storage"]
+        .0
+        .as_str();
     assert_eq!(storage, "10Mi");
 }
 
@@ -255,9 +285,15 @@ fn test_pvc_ssh_bastion_non_shell_mode_no_home_pvcs() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Sftp, restricted_rsync: None, shell: None, public_keys: String::new() },
-                ],
+                users: vec![SshUser {
+                    name: "alice".into(),
+                    uid: 1001,
+                    gid: 1001,
+                    mode: SshMode::Sftp,
+                    restricted_rsync: None,
+                    shell: None,
+                    public_keys: String::new(),
+                }],
                 ..Default::default()
             })),
             ..Default::default()
@@ -267,7 +303,12 @@ fn test_pvc_ssh_bastion_non_shell_mode_no_home_pvcs() {
 
     let pvcs = servarr_resources::pvc::build_all(&app);
     assert!(
-        !pvcs.iter().any(|p| p.metadata.name.as_deref().unwrap_or("").contains("ssh-home")),
+        !pvcs.iter().any(|p| p
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("")
+            .contains("ssh-home")),
         "Non-shell modes must not create ssh-home PVCs"
     );
 }
@@ -284,9 +325,15 @@ fn test_deployment_ssh_bastion_shell_mode_home_mounts() {
         spec: ServarrAppSpec {
             app: AppType::SshBastion,
             app_config: Some(AppConfig::SshBastion(SshBastionConfig {
-                users: vec![
-                    SshUser { name: "alice".into(), uid: 1001, gid: 1001, mode: SshMode::Shell, restricted_rsync: None, shell: None, public_keys: "ssh-ed25519 AAAA".into() },
-                ],
+                users: vec![SshUser {
+                    name: "alice".into(),
+                    uid: 1001,
+                    gid: 1001,
+                    mode: SshMode::Shell,
+                    restricted_rsync: None,
+                    shell: None,
+                    public_keys: "ssh-ed25519 AAAA".into(),
+                }],
                 ..Default::default()
             })),
             ..Default::default()
@@ -301,7 +348,9 @@ fn test_deployment_ssh_bastion_shell_mode_home_mounts() {
     let volumes = pod_spec.volumes.as_ref().unwrap();
 
     assert!(
-        mounts.iter().any(|m| m.name == "ssh-home-alice" && m.mount_path == "/home/alice/.ssh"),
+        mounts
+            .iter()
+            .any(|m| m.name == "ssh-home-alice" && m.mount_path == "/home/alice/.ssh"),
         "Shell mode must mount ssh-home-alice at /home/alice/.ssh"
     );
     assert!(
@@ -1295,8 +1344,14 @@ fn test_configmap_ssh_bastion_restricted_rsync() {
     let script = &data["restricted-rsync-backup.sh"];
     assert!(script.contains("/data/backups"));
     assert!(script.contains("/media"));
-    assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
-    assert!(!script.contains("READONLY"), "READONLY variable must not exist; read-only is always enforced");
+    assert!(
+        script.contains("--sender"),
+        "script must enforce read-only via --sender check"
+    );
+    assert!(
+        !script.contains("READONLY"),
+        "READONLY variable must not exist; read-only is always enforced"
+    );
 }
 
 #[test]
@@ -1329,9 +1384,15 @@ fn test_configmap_ssh_bastion_rsync_mode_produces_configmap() {
     };
 
     let cm = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app);
-    assert!(cm.is_some(), "SshMode::Rsync should produce a restricted-rsync ConfigMap");
+    assert!(
+        cm.is_some(),
+        "SshMode::Rsync should produce a restricted-rsync ConfigMap"
+    );
     let script = &cm.unwrap().data.unwrap()["restricted-rsync-backup.sh"];
-    assert!(script.contains("--sender"), "script must enforce read-only via --sender check");
+    assert!(
+        script.contains("--sender"),
+        "script must enforce read-only via --sender check"
+    );
     // No allowed paths configured — ALLOWED_PATHS array must be empty
     assert!(
         script.contains("ALLOWED_PATHS=(\n\n)") || script.contains("ALLOWED_PATHS=(\n)"),
@@ -1627,9 +1688,18 @@ fn test_deployment_ssh_bastion_init_containers() {
     );
 
     // args should include -p with the SSH port so sshd listens on the right port
-    let args = container.args.as_ref().expect("SSH bastion should have args");
-    let p_idx = args.iter().position(|a| a == "-p").expect("args should include -p flag");
-    assert!(p_idx + 1 < args.len(), "args should have a port value after -p");
+    let args = container
+        .args
+        .as_ref()
+        .expect("SSH bastion should have args");
+    let p_idx = args
+        .iter()
+        .position(|a| a == "-p")
+        .expect("args should include -p flag");
+    assert!(
+        p_idx + 1 < args.len(),
+        "args should have a port value after -p"
+    );
 }
 
 #[test]
@@ -1681,7 +1751,11 @@ fn test_deployment_ssh_bastion_rsync_mode_uses_restricted_rsync() {
     let env = container.env.as_ref().unwrap();
     let ssh_users = env.iter().find(|e| e.name == "SSH_USERS").unwrap();
     assert!(
-        ssh_users.value.as_deref().unwrap_or("").contains("/usr/local/bin/restricted-rsync-backup"),
+        ssh_users
+            .value
+            .as_deref()
+            .unwrap_or("")
+            .contains("/usr/local/bin/restricted-rsync-backup"),
         "SshMode::Rsync user shell must be /usr/local/bin/restricted-rsync-backup"
     );
 }
@@ -1720,8 +1794,14 @@ fn test_deployment_ssh_bastion_shell_package_installed() {
     let init = pod_spec.init_containers.as_ref().unwrap();
     let patch = init.iter().find(|c| c.name == "patch-entry").unwrap();
     let script = patch.command.as_ref().unwrap().last().unwrap();
-    assert!(script.contains("apk add"), "patch-entry should install packages");
-    assert!(script.contains("bash"), "patch-entry should install bash for /bin/bash users");
+    assert!(
+        script.contains("apk add"),
+        "patch-entry should install packages"
+    );
+    assert!(
+        script.contains("bash"),
+        "patch-entry should install bash for /bin/bash users"
+    );
 }
 
 #[test]
@@ -2930,7 +3010,10 @@ fn make_owner_ref() -> k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerRefe
 fn test_nfs_server_statefulset_name_and_namespace() {
     let nfs = NfsServerSpec::default();
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     assert_eq!(ss.metadata.name.as_deref(), Some("mystack-nfs-server"));
     assert_eq!(ss.metadata.namespace.as_deref(), Some("media"));
@@ -2940,7 +3023,10 @@ fn test_nfs_server_statefulset_name_and_namespace() {
 fn test_nfs_server_statefulset_replicas_and_service_name() {
     let nfs = NfsServerSpec::default();
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     let spec = ss.spec.unwrap();
     assert_eq!(spec.replicas, Some(1));
@@ -2951,7 +3037,10 @@ fn test_nfs_server_statefulset_replicas_and_service_name() {
 fn test_nfs_server_statefulset_port_2049() {
     let nfs = NfsServerSpec::default();
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     let spec = ss.spec.unwrap();
     let pod_spec = spec.template.spec.unwrap();
@@ -2967,7 +3056,10 @@ fn test_nfs_server_statefulset_port_2049() {
 fn test_nfs_server_statefulset_export_dir_mount() {
     let nfs = NfsServerSpec::default();
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     let spec = ss.spec.unwrap();
     let pod_spec = spec.template.spec.unwrap();
@@ -2987,15 +3079,15 @@ fn test_nfs_server_statefulset_volume_claim_template_storage_size() {
         ..Default::default()
     };
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     let spec = ss.spec.unwrap();
     let vclaim = &spec.volume_claim_templates.unwrap()[0];
     let pvc_spec = vclaim.spec.as_ref().unwrap();
-    assert_eq!(
-        pvc_spec.storage_class_name.as_deref(),
-        Some("fast-ssd")
-    );
+    assert_eq!(pvc_spec.storage_class_name.as_deref(), Some("fast-ssd"));
     let storage = pvc_spec
         .resources
         .as_ref()
@@ -3020,7 +3112,10 @@ fn test_nfs_server_statefulset_custom_image() {
         ..Default::default()
     };
     let ss = servarr_resources::nfs_server::build_statefulset(
-        "mystack", "media", &nfs, make_owner_ref(),
+        "mystack",
+        "media",
+        &nfs,
+        make_owner_ref(),
     );
     let spec = ss.spec.unwrap();
     let container = &spec.template.spec.unwrap().containers[0];
@@ -3055,7 +3150,10 @@ fn test_nfs_server_service_port_2049() {
 fn test_nfs_server_service_selector_labels() {
     let svc = servarr_resources::nfs_server::build_service("mystack", "media", make_owner_ref());
     let selector = svc.spec.unwrap().selector.unwrap();
-    assert_eq!(selector.get("servarr.dev/stack").map(|s| s.as_str()), Some("mystack"));
+    assert_eq!(
+        selector.get("servarr.dev/stack").map(|s| s.as_str()),
+        Some("mystack")
+    );
     assert_eq!(
         selector.get("servarr.dev/component").map(|s| s.as_str()),
         Some("nfs-server")
@@ -3082,8 +3180,13 @@ fn test_deployment_intel_gpu_adds_nfd_node_selector() {
     });
     let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
     let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
-    let sel = pod_spec.node_selector.expect("nodeSelector must be set for Intel GPU");
-    assert_eq!(sel.get("gpu.intel.com/i915").map(|s| s.as_str()), Some("true"));
+    let sel = pod_spec
+        .node_selector
+        .expect("nodeSelector must be set for Intel GPU");
+    assert_eq!(
+        sel.get("gpu.intel.com/i915").map(|s| s.as_str()),
+        Some("true")
+    );
     assert!(!sel.contains_key("gpu.nvidia.com/present"));
     assert!(!sel.contains_key("gpu.amd.com/present"));
 }
@@ -3097,8 +3200,13 @@ fn test_deployment_nvidia_gpu_adds_nfd_node_selector() {
     });
     let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
     let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
-    let sel = pod_spec.node_selector.expect("nodeSelector must be set for NVIDIA GPU");
-    assert_eq!(sel.get("gpu.nvidia.com/present").map(|s| s.as_str()), Some("true"));
+    let sel = pod_spec
+        .node_selector
+        .expect("nodeSelector must be set for NVIDIA GPU");
+    assert_eq!(
+        sel.get("gpu.nvidia.com/present").map(|s| s.as_str()),
+        Some("true")
+    );
     assert!(!sel.contains_key("gpu.intel.com/i915"));
     assert!(!sel.contains_key("gpu.amd.com/present"));
 }
@@ -3112,8 +3220,13 @@ fn test_deployment_amd_gpu_adds_nfd_node_selector() {
     });
     let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
     let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
-    let sel = pod_spec.node_selector.expect("nodeSelector must be set for AMD GPU");
-    assert_eq!(sel.get("gpu.amd.com/present").map(|s| s.as_str()), Some("true"));
+    let sel = pod_spec
+        .node_selector
+        .expect("nodeSelector must be set for AMD GPU");
+    assert_eq!(
+        sel.get("gpu.amd.com/present").map(|s| s.as_str()),
+        Some("true")
+    );
     assert!(!sel.contains_key("gpu.intel.com/i915"));
     assert!(!sel.contains_key("gpu.nvidia.com/present"));
 }
@@ -3126,15 +3239,19 @@ fn test_deployment_user_node_selector_preserved_with_gpu() {
         ..Default::default()
     });
     app.spec.scheduling = Some(servarr_crds::NodeScheduling {
-        node_selector: std::collections::BTreeMap::from([
-            ("kubernetes.io/hostname".into(), "my-node".into()),
-        ]),
+        node_selector: std::collections::BTreeMap::from([(
+            "kubernetes.io/hostname".into(),
+            "my-node".into(),
+        )]),
         ..Default::default()
     });
     let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
     let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
     let sel = pod_spec.node_selector.expect("nodeSelector must be set");
-    assert_eq!(sel.get("gpu.intel.com/i915").map(|s| s.as_str()), Some("true"));
+    assert_eq!(
+        sel.get("gpu.intel.com/i915").map(|s| s.as_str()),
+        Some("true")
+    );
     assert_eq!(
         sel.get("kubernetes.io/hostname").map(|s| s.as_str()),
         Some("my-node")

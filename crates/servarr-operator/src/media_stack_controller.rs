@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, HashSet};
 use chrono;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -489,9 +489,7 @@ async fn reconcile_nfs_server(
             .patch(
                 &nfs_name,
                 pp,
-                &Patch::Apply(
-                    serde_json::to_value(&statefulset).map_err(Error::Serialization)?,
-                ),
+                &Patch::Apply(serde_json::to_value(&statefulset).map_err(Error::Serialization)?),
             )
             .await
             .map_err(Error::Kube)?;
