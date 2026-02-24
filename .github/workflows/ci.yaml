@@ -307,6 +307,7 @@ jobs:
 
       - name: Install operator via Helm
         run: |
+          helm dependency build charts/servarr-operator/
           helm template smoke charts/servarr-operator/ \
             --set image.repository=servarr-operator \
             --set image.tag=ci \
