@@ -80,11 +80,9 @@ jobs:
           cp -f /tmp/bin-arm64/servarr-operator /tmp/docker-context/servarr-operator-arm64
 
           cat > /tmp/docker-context/Dockerfile <<'DOCKERFILE'
-          FROM debian:bookworm-slim
-          RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && apt-get clean
+          FROM gcr.io/distroless/static-debian12:nonroot
           ARG TARGETARCH
           COPY servarr-operator-${TARGETARCH} /servarr-operator
-          USER nobody:nogroup
           ENTRYPOINT ["/servarr-operator"]
           DOCKERFILE
 
