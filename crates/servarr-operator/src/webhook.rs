@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -7,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
+use axum_server::tls_rustls::RustlsConfig;
 use kube::Client;
 use kube::api::{Api, ListParams};
 use serde::{Deserialize, Serialize};
@@ -15,10 +17,14 @@ use tracing::{debug, info, warn};
 
 const DEFAULT_WEBHOOK_PORT: u16 = 9443;
 
+const DEFAULT_TLS_DIR: &str = "/etc/webhook/tls";
+
 /// Configuration for the webhook server.
 #[derive(Clone)]
 pub struct WebhookConfig {
     pub port: u16,
+    pub tls_cert: PathBuf,
+    pub tls_key: PathBuf,
 }
 
 impl Default for WebhookConfig {
@@ -36,7 +42,21 @@ impl Default for WebhookConfig {
             },
             Err(_) => DEFAULT_WEBHOOK_PORT,
         };
-        Self { port }
+
+        let tls_dir =
+            std::env::var("WEBHOOK_TLS_DIR").unwrap_or_else(|_| DEFAULT_TLS_DIR.to_string());
+        let tls_cert = std::env::var("WEBHOOK_TLS_CERT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| Path::new(&tls_dir).join("tls.crt"));
+        let tls_key = std::env::var("WEBHOOK_TLS_KEY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| Path::new(&tls_dir).join("tls.key"));
+
+        Self {
+            port,
+            tls_cert,
+            tls_key,
+        }
     }
 }
 
@@ -93,8 +113,10 @@ struct AdmissionStatus {
 /// Start the validating webhook server.
 ///
 /// Listens for `POST /validate-servarrapp` with AdmissionReview payloads.
-/// TLS termination is expected to be handled externally (e.g. by a sidecar
-/// or service mesh). Set `WEBHOOK_PORT` to override the default port 9443.
+/// Serves TLS using the cert/key at `config.tls_cert` / `config.tls_key`
+/// (defaults: `/etc/webhook/tls/tls.crt` and `/etc/webhook/tls/tls.key`).
+/// Override paths via `WEBHOOK_TLS_CERT`, `WEBHOOK_TLS_KEY`, or `WEBHOOK_TLS_DIR`.
+/// Set `WEBHOOK_PORT` to override the default port 9443.
 pub async fn run(client: kube::Client, config: WebhookConfig) -> anyhow::Result<()> {
     let state = Arc::new(WebhookState { client });
     let app = Router::new()
@@ -102,10 +124,21 @@ pub async fn run(client: kube::Client, config: WebhookConfig) -> anyhow::Result<
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    info!(%addr, "starting webhook server");
+    info!(%addr, cert = %config.tls_cert.display(), "starting webhook server (TLS)");
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let tls = RustlsConfig::from_pem_file(&config.tls_cert, &config.tls_key)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to load webhook TLS cert {:?} / key {:?}: {e}",
+                config.tls_cert,
+                config.tls_key
+            )
+        })?;
+
+    axum_server::bind_rustls(addr, tls)
+        .serve(app.into_make_service())
+        .await?;
     Ok(())
 }
 
