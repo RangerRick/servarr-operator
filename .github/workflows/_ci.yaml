@@ -62,22 +62,27 @@ jobs:
           cache-on-failure: true
           key: musl-${{ matrix.arch }}
 
-      - name: Install cross-compilation tools
+      - name: Install musl toolchain
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq musl-tools
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
           rustup target add ${{ matrix.target }}
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            sudo apt-get install -y -qq gcc-aarch64-linux-gnu
-            mkdir -p .cargo
-            cat > .cargo/config.toml <<'TOML'
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-gnu-gcc"
-          TOML
-          fi
+
+      - name: Install cross (arm64 only)
+        if: matrix.arch == 'arm64'
+        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
+        with:
+          tool: cross
 
       - name: Build static release binary
-        run: cargo build --release --target ${{ matrix.target }} --bin servarr-operator
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # gcc-aarch64-linux-gnu targets glibc; on Ubuntu 24.04 it emits
+            # __isoc23_sscanf and __*_chk symbols that musl does not provide.
+            # cross uses a Docker image with a proper musl cross-toolchain.
+            cross build --release --target ${{ matrix.target }} --bin servarr-operator
+          else
+            cargo build --release --target ${{ matrix.target }} --bin servarr-operator
+          fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
