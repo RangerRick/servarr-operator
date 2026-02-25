@@ -43,8 +43,8 @@ impl Default for WebhookConfig {
             Err(_) => DEFAULT_WEBHOOK_PORT,
         };
 
-        let tls_dir = std::env::var("WEBHOOK_TLS_DIR")
-            .unwrap_or_else(|_| DEFAULT_TLS_DIR.to_string());
+        let tls_dir =
+            std::env::var("WEBHOOK_TLS_DIR").unwrap_or_else(|_| DEFAULT_TLS_DIR.to_string());
         let tls_cert = std::env::var("WEBHOOK_TLS_CERT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| Path::new(&tls_dir).join("tls.crt"));
@@ -52,7 +52,11 @@ impl Default for WebhookConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| Path::new(&tls_dir).join("tls.key"));
 
-        Self { port, tls_cert, tls_key }
+        Self {
+            port,
+            tls_cert,
+            tls_key,
+        }
     }
 }
 
@@ -124,10 +128,13 @@ pub async fn run(client: kube::Client, config: WebhookConfig) -> anyhow::Result<
 
     let tls = RustlsConfig::from_pem_file(&config.tls_cert, &config.tls_key)
         .await
-        .map_err(|e| anyhow::anyhow!(
-            "failed to load webhook TLS cert {:?} / key {:?}: {e}",
-            config.tls_cert, config.tls_key
-        ))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to load webhook TLS cert {:?} / key {:?}: {e}",
+                config.tls_cert,
+                config.tls_key
+            )
+        })?;
 
     axum_server::bind_rustls(addr, tls)
         .serve(app.into_make_service())
