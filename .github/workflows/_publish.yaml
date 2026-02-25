@@ -50,13 +50,13 @@ jobs:
       - name: Download amd64 binary
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: operator-binary-amd64
+          name: operator-binary-linux-amd64
           path: /tmp/bin-amd64
 
       - name: Download arm64 binary
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: operator-binary-arm64
+          name: operator-binary-linux-arm64
           path: /tmp/bin-arm64
 
       - name: Set up QEMU
