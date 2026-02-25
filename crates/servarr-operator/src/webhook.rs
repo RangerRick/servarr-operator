@@ -95,8 +95,7 @@ struct AdmissionStatus {
 /// Listens for `POST /validate-servarrapp` with AdmissionReview payloads.
 /// TLS termination is expected to be handled externally (e.g. by a sidecar
 /// or service mesh). Set `WEBHOOK_PORT` to override the default port 9443.
-pub async fn run(config: WebhookConfig) -> anyhow::Result<()> {
-    let client = Client::try_default().await?;
+pub async fn run(client: kube::Client, config: WebhookConfig) -> anyhow::Result<()> {
     let state = Arc::new(WebhookState { client });
     let app = Router::new()
         .route("/validate-servarrapp", post(validate_handler))

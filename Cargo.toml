@@ -13,7 +13,7 @@ license = "MIT"
 repository = "https://github.com/servarr/servarr-operator"
 
 [workspace.dependencies]
-kube = { version = "3.0.1", default-features = false, features = ["runtime", "derive", "client", "rustls-tls"] }
+kube = { version = "3.0.1", default-features = false, features = ["runtime", "derive", "client", "rustls-tls", "config"] }
 k8s-openapi = { version = "0.27.0", features = ["v1_34", "schemars"] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
