@@ -139,6 +139,7 @@ jobs:
           echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
           for chart in servarr-crds servarr-operator; do
+            helm dependency build "charts/${chart}/"
             helm package "charts/${chart}/" \
               --version "${CHART_VERSION}" \
               --app-version "${CHART_APP_VERSION}" \
