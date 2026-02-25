@@ -171,6 +171,15 @@ jobs:
   # Runs in parallel with clippy/test to eliminate serial wait.
   build:
     needs: [fmt, actionlint, zizmor]
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: amd64
+            upload-artifacts: true
+          - target: aarch64-unknown-linux-musl
+            arch: arm64
+            upload-artifacts: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -182,26 +191,42 @@ jobs:
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           cache-on-failure: true
-          key: musl
+          key: musl-${{ matrix.arch }}
 
       - name: Install musl toolchain
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-          rustup target add x86_64-unknown-linux-musl
+          rustup target add ${{ matrix.target }}
+
+      - name: Install cross (arm64 only)
+        if: matrix.arch == 'arm64'
+        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
+        with:
+          tool: cross
 
       - name: Build static release binary
-        run: cargo build --release --target x86_64-unknown-linux-musl --bin servarr-operator
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # gcc-aarch64-linux-gnu targets glibc; on Ubuntu 24.04 it emits
+            # __isoc23_sscanf and __*_chk symbols that musl does not provide.
+            # cross uses a Docker image with a proper musl cross-toolchain.
+            cross build --release --target ${{ matrix.target }} --bin servarr-operator
+          else
+            cargo build --release --target ${{ matrix.target }} --bin servarr-operator
+          fi
 
       - name: Upload binary artifact
+        if: matrix.upload-artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-binary
-          path: target/x86_64-unknown-linux-musl/release/servarr-operator
+          path: target/${{ matrix.target }}/release/servarr-operator
           retention-days: 1
 
       - name: Package Docker image
+        if: matrix.upload-artifacts
         run: |
-          cp target/x86_64-unknown-linux-musl/release/servarr-operator /tmp/servarr-operator
+          cp target/${{ matrix.target }}/release/servarr-operator /tmp/servarr-operator
           docker build -t servarr-operator:ci -f- /tmp <<'DOCKERFILE'
           FROM gcr.io/distroless/static-debian12:nonroot
           COPY servarr-operator /servarr-operator
@@ -210,9 +235,11 @@ jobs:
           DOCKERFILE
 
       - name: Save Docker image as artifact
+        if: matrix.upload-artifacts
         run: docker save servarr-operator:ci | gzip > /tmp/servarr-operator-ci.tar.gz
 
       - name: Upload Docker image artifact
+        if: matrix.upload-artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-image
