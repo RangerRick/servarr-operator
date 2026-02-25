@@ -288,6 +288,8 @@ fn validate_app_config_match(spec: &ServarrAppSpec, errors: &mut Vec<String>) {
             (AppType::Transmission, AppConfig::Transmission(_))
                 | (AppType::Sabnzbd, AppConfig::Sabnzbd(_))
                 | (AppType::Prowlarr, AppConfig::Prowlarr(_))
+                | (AppType::SshBastion, AppConfig::SshBastion(_))
+                | (AppType::Overseerr, AppConfig::Overseerr(_))
         );
         if !valid {
             errors.push(format!(
@@ -640,6 +642,24 @@ mod tests {
     fn app_config_match_prowlarr_ok() {
         let mut spec = minimal_spec(AppType::Prowlarr);
         spec.app_config = Some(AppConfig::Prowlarr(ProwlarrConfig::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_overseerr_ok() {
+        let mut spec = minimal_spec(AppType::Overseerr);
+        spec.app_config = Some(AppConfig::Overseerr(Box::default()));
+        let mut errors = Vec::new();
+        validate_app_config_match(&spec, &mut errors);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn app_config_match_ssh_bastion_ok() {
+        let mut spec = minimal_spec(AppType::SshBastion);
+        spec.app_config = Some(AppConfig::SshBastion(SshBastionConfig::default()));
         let mut errors = Vec::new();
         validate_app_config_match(&spec, &mut errors);
         assert!(errors.is_empty());
