@@ -59,6 +59,18 @@ jobs:
           name: operator-binary-linux-arm64
           path: /tmp/bin-arm64
 
+      - name: Download darwin-amd64 binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: operator-binary-darwin-amd64
+          path: /tmp/bin-darwin-amd64
+
+      - name: Download darwin-arm64 binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: operator-binary-darwin-arm64
+          path: /tmp/bin-darwin-arm64
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
@@ -141,10 +153,18 @@ jobs:
         run: |
           cp -f /tmp/bin-amd64/servarr-operator /tmp/servarr-operator-linux-amd64
           cp -f /tmp/bin-arm64/servarr-operator /tmp/servarr-operator-linux-arm64
-          chmod +x /tmp/servarr-operator-linux-amd64 /tmp/servarr-operator-linux-arm64
+          cp -f /tmp/bin-darwin-amd64/servarr-operator /tmp/servarr-operator-darwin-amd64
+          cp -f /tmp/bin-darwin-arm64/servarr-operator /tmp/servarr-operator-darwin-arm64
+          chmod +x \
+            /tmp/servarr-operator-linux-amd64 \
+            /tmp/servarr-operator-linux-arm64 \
+            /tmp/servarr-operator-darwin-amd64 \
+            /tmp/servarr-operator-darwin-arm64
 
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
             --generate-notes \
             /tmp/servarr-operator-linux-amd64 \
-            /tmp/servarr-operator-linux-arm64
+            /tmp/servarr-operator-linux-arm64 \
+            /tmp/servarr-operator-darwin-amd64 \
+            /tmp/servarr-operator-darwin-arm64
