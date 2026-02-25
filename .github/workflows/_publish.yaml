@@ -132,6 +132,7 @@ jobs:
 
       - name: Package and push Helm charts
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHART_VERSION: ${{ inputs.chart-version }}
           CHART_APP_VERSION: ${{ inputs.chart-app-version }}
         run: |
