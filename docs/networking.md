@@ -524,7 +524,7 @@ kubectl wait --timeout=5m \
 
 ### Step 2 — Create a GatewayClass and Gateway
 
-Save the following to `local/gateway.yaml` and apply it:
+Apply the following manifest:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -548,7 +548,7 @@ spec:
 ```
 
 ```bash
-kubectl apply -f local/gateway.yaml
+kubectl apply -f gateway.yaml
 ```
 
 Envoy Gateway creates a LoadBalancer Service for the Gateway and Docker Desktop
@@ -594,7 +594,7 @@ separate host to the 4K instance:
         - sonarr-4k.127.0.0.1.nip.io
 ```
 
-See `local/kitchen-sink.yaml` for a complete working example covering all apps.
+The `split4kOverrides.gateway` field lets each instance have its own hostname with no extra resources.
 
 ### Step 4 — Verify
 
