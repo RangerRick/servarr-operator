@@ -494,6 +494,142 @@ spec:
 
 ---
 
+## Local Development with Envoy Gateway and nip.io
+
+When running a local cluster (e.g. Docker Desktop or kind), you can reach every
+app in a browser without `kubectl port-forward` by combining Envoy Gateway with
+[nip.io](https://nip.io) hostnames.
+
+### How it works
+
+- **Envoy Gateway** creates a `LoadBalancer` Service for your `Gateway` resource.
+  Docker Desktop maps LoadBalancer services to `localhost` / `127.0.0.1`.
+- **nip.io** is a public wildcard DNS service. A hostname like
+  `sonarr.127.0.0.1.nip.io` resolves to `127.0.0.1` via public DNS — no local
+  `/etc/hosts` edits, no dnsmasq, no VPN.
+
+### Step 1 — Install Envoy Gateway
+
+```bash
+helm install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.7.0 \
+  --namespace envoy-gateway-system --create-namespace
+
+kubectl wait --timeout=5m \
+  -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available
+```
+
+> If the Gateway API CRDs are already installed in your cluster (e.g. by
+> another tool), add `--skip-crds` to avoid field-manager conflicts.
+
+### Step 2 — Create a GatewayClass and Gateway
+
+Save the following to `local/gateway.yaml` and apply it:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-gateway
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: servarr-gateway
+  namespace: servarr-system
+spec:
+  gatewayClassName: envoy-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+```
+
+```bash
+kubectl apply -f local/gateway.yaml
+```
+
+Envoy Gateway creates a LoadBalancer Service for the Gateway and Docker Desktop
+assigns it `localhost` / `127.0.0.1`.
+
+### Step 3 — Add gateway config to each app
+
+Point every app at the Gateway with a nip.io hostname:
+
+```yaml
+gateway:
+  enabled: true
+  parentRefs:
+    - name: servarr-gateway
+      namespace: servarr-system
+      sectionName: http
+  hosts:
+    - sonarr.127.0.0.1.nip.io
+```
+
+For `split4k` apps (Sonarr, Radarr) use `split4kOverrides.gateway` to assign a
+separate host to the 4K instance:
+
+```yaml
+- app: Sonarr
+  split4k: true
+  gateway:
+    enabled: true
+    parentRefs:
+      - name: servarr-gateway
+        namespace: servarr-system
+        sectionName: http
+    hosts:
+      - sonarr.127.0.0.1.nip.io
+  split4kOverrides:
+    gateway:
+      enabled: true
+      parentRefs:
+        - name: servarr-gateway
+          namespace: servarr-system
+          sectionName: http
+      hosts:
+        - sonarr-4k.127.0.0.1.nip.io
+```
+
+See `local/kitchen-sink.yaml` for a complete working example covering all apps.
+
+### Step 4 — Verify
+
+```bash
+# Gateway should show address 127.0.0.1 / localhost
+kubectl get gateway -n servarr-system servarr-gateway
+
+# One HTTPRoute per app
+kubectl get httproute -n servarr-system
+
+# Open in browser (no port needed)
+open http://sonarr.127.0.0.1.nip.io
+open http://sonarr-4k.127.0.0.1.nip.io
+```
+
+### App hostname reference
+
+| App | URL |
+|-----|-----|
+| Plex | http://plex.127.0.0.1.nip.io |
+| Jellyfin | http://jellyfin.127.0.0.1.nip.io |
+| Sabnzbd | http://sabnzbd.127.0.0.1.nip.io |
+| Transmission | http://transmission.127.0.0.1.nip.io |
+| Sonarr | http://sonarr.127.0.0.1.nip.io |
+| Sonarr 4K | http://sonarr-4k.127.0.0.1.nip.io |
+| Radarr | http://radarr.127.0.0.1.nip.io |
+| Radarr 4K | http://radarr-4k.127.0.0.1.nip.io |
+| Lidarr | http://lidarr.127.0.0.1.nip.io |
+| Prowlarr | http://prowlarr.127.0.0.1.nip.io |
+| Overseerr | http://overseerr.127.0.0.1.nip.io |
+| Tautulli | http://tautulli.127.0.0.1.nip.io |
+| Maintainerr | http://maintainerr.127.0.0.1.nip.io |
+
+---
+
 ## Combining Features
 
 A complete example with service, gateway, TLS, and network policy:
