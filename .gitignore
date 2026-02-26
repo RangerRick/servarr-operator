@@ -1,4 +1,5 @@
 /target/
+/local/
 .*.sw[op]
 .env
 # Helm dependency tarballs are downloaded at install time via `helm dependency build`
