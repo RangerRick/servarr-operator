@@ -31,6 +31,22 @@ spec:
         properties:
           spec:
             properties:
+              adminCredentials:
+                description: |-
+                  Admin credentials for this app. References a user-created Kubernetes Secret
+                  with `username` and `password` keys. The operator reads but never owns this secret.
+
+                  For Sonarr, Radarr, Lidarr, and Prowlarr: injected as `APP__AUTH__USERNAME`,
+                  `APP__AUTH__PASSWORD`, and `APP__AUTH__METHOD=Forms` env vars (requires restart).
+                  For other apps: applied via live API calls on every reconcile.
+                nullable: true
+                properties:
+                  secretName:
+                    description: Name of a Kubernetes Secret containing `username` and `password` keys.
+                    type: string
+                required:
+                - secretName
+                type: object
               apiHealthCheck:
                 description: API-driven health check configuration.
                 nullable: true

@@ -38,6 +38,20 @@ spec:
                 description: The list of apps to deploy as part of this stack.
                 items:
                   properties:
+                    adminCredentials:
+                      description: |-
+                        Reference to a user-created Kubernetes Secret containing admin credentials.
+
+                        The operator reads but never creates or owns this secret. It must have
+                        `username` and `password` keys.
+                      nullable: true
+                      properties:
+                        secretName:
+                          description: Name of a Kubernetes Secret containing `username` and `password` keys.
+                          type: string
+                      required:
+                      - secretName
+                      type: object
                     apiHealthCheck:
                       description: Configuration for API-driven health checks.
                       nullable: true
@@ -871,6 +885,20 @@ spec:
                       description: Override fields applied only to the 4K instance when split4k is true.
                       nullable: true
                       properties:
+                        adminCredentials:
+                          description: |-
+                            Reference to a user-created Kubernetes Secret containing admin credentials.
+
+                            The operator reads but never creates or owns this secret. It must have
+                            `username` and `password` keys.
+                          nullable: true
+                          properties:
+                            secretName:
+                              description: Name of a Kubernetes Secret containing `username` and `password` keys.
+                              type: string
+                          required:
+                          - secretName
+                          type: object
                         env:
                           default: []
                           items:
@@ -1078,6 +1106,20 @@ spec:
                   override these values.
                 nullable: true
                 properties:
+                  adminCredentials:
+                    description: |-
+                      Reference to a user-created Kubernetes Secret containing admin credentials.
+
+                      The operator reads but never creates or owns this secret. It must have
+                      `username` and `password` keys.
+                    nullable: true
+                    properties:
+                      secretName:
+                        description: Name of a Kubernetes Secret containing `username` and `password` keys.
+                        type: string
+                    required:
+                    - secretName
+                    type: object
                   env:
                     default: []
                     items:
