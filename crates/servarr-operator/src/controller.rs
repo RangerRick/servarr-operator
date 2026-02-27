@@ -446,6 +446,12 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
 
     // Admin credential sync via live API (SABnzbd, Transmission, Jellyfin, Tautulli, Overseerr)
     let admin_creds_condition = sync_admin_credentials(client, &app, &ns).await;
+    // If sync failed (app not ready yet), requeue sooner than the default 300s so
+    // credentials are applied once the app becomes healthy.
+    let admin_creds_pending = admin_creds_condition
+        .as_ref()
+        .map(|c| c.status != "True")
+        .unwrap_or(false);
 
     // Backup scheduling (non-blocking)
     let backup_status = maybe_run_backup(client, &app, &ns, &recorder, &obj_ref).await;
@@ -528,7 +534,10 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         .await
         .map_err(Error::Kube)?;
 
-    Ok(Action::requeue(Duration::from_secs(300)))
+    // Use a short requeue interval when admin credential sync is still pending so
+    // the operator retries quickly once the app finishes starting up.
+    let requeue_secs = if admin_creds_pending { 30 } else { 300 };
+    Ok(Action::requeue(Duration::from_secs(requeue_secs)))
 }
 
 /// Create the API key Secret the first time `apiKeySecret` is reconciled.

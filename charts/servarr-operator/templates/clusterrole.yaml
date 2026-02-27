@@ -39,10 +39,10 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "create", "patch"]
-  # Secrets: get for API keys + create/patch for SSH bastion authorized-keys
+  # Secrets: get/list/watch for API keys and admin-credentials; create/patch for SSH bastion.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "create", "patch"]
+    verbs: ["get", "list", "watch", "create", "patch"]
   # NetworkPolicies: SSA create/patch
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
