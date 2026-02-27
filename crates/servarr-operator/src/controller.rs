@@ -373,9 +373,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         app.spec.app,
         AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
     );
-    if uses_env_var_creds
-        && let Some(ref ac) = app.spec.admin_credentials
-    {
+    if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
     }
 
