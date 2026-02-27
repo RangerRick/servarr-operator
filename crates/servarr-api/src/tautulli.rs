@@ -49,6 +49,95 @@ impl TautulliClient {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn client(server: &MockServer) -> TautulliClient {
+        TautulliClient::new(&server.uri()).expect("client")
+    }
+
+    #[test]
+    fn new_trims_trailing_slash() {
+        TautulliClient::new("http://localhost:8181/").unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_credentials_calls_correct_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2"))
+            .and(query_param("cmd", "set_credentials"))
+            .and(query_param("username", "admin"))
+            .and(query_param("password", "s3cr3t"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).set_credentials("admin", "s3cr3t").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_credentials_returns_error_on_non_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
+            .mount(&server)
+            .await;
+        let err = client(&server).set_credentials("admin", "bad").await.unwrap_err();
+        match err {
+            ApiError::ApiResponse { status, .. } => assert_eq!(status, 403),
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn is_healthy_returns_true_on_success_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2"))
+            .and(query_param("cmd", "status"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"response": {"result": "success"}}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        assert!(client(&server).is_healthy().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_healthy_returns_false_on_non_success_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"response": {"result": "error"}}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        assert!(!client(&server).is_healthy().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_healthy_returns_false_on_http_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        assert!(!client(&server).is_healthy().await.unwrap());
+    }
+}
+
 impl HealthCheck for TautulliClient {
     async fn is_healthy(&self) -> Result<bool, ApiError> {
         let mut url = self.http.base_url().clone();

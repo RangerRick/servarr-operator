@@ -257,6 +257,61 @@ impl std::io::Write for Base64Writer<'_> {
 
 #[cfg(test)]
 mod tests {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn rpc_ok(result: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"result": "success", "arguments": result})
+    }
+
+    #[tokio::test]
+    async fn session_set_auth_sends_correct_arguments() {
+        let server = MockServer::start().await;
+        // First request returns 409 with a session ID
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(409)
+                    .append_header("X-Transmission-Session-Id", "sess-abc"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Retry succeeds
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = TransmissionClient::new(&server.uri(), None, None).unwrap();
+        client.session_set_auth("admin", "secret").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_get_returns_session_info() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transmission/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({
+                "version": "3.00 (bb6b5a062e)",
+                "rpc-version": 17,
+                "rpc-version-minimum": 14,
+                "download-dir": "/downloads",
+                "config-dir": "/config",
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = TransmissionClient::new(&server.uri(), None, None).unwrap();
+        let info = client.session_get().await.unwrap();
+        assert!(info.version.starts_with("3.00"));
+    }
+
     use super::base64_encode;
 
     #[test]

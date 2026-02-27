@@ -158,6 +158,41 @@ mod tests {
         assert_eq!(client.config.base_path, "http://localhost:5055");
     }
 
+    #[tokio::test]
+    async fn setup_local_auth_calls_correct_endpoint() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/auth/local"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = OverseerrClient::new(&server.uri(), "test-key");
+        client.setup_local_auth("admin", "pass").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn setup_local_auth_returns_error_on_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v1/auth/local"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+            .mount(&server)
+            .await;
+        let client = OverseerrClient::new(&server.uri(), "test-key");
+        let err = client.setup_local_auth("admin", "wrong").await.unwrap_err();
+        match err {
+            ApiError::ApiResponse { status, .. } => assert_eq!(status, 401),
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
     #[test]
     fn map_err_formats_debug() {
         // The overseerr SDK Error type wraps a reqwest error or a response body.

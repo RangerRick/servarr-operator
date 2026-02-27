@@ -226,3 +226,247 @@ impl HealthCheck for JellyfinClient {
         Ok(resp.status().is_success())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    fn client(server: &MockServer) -> JellyfinClient {
+        JellyfinClient::new(&server.uri()).expect("client")
+    }
+
+    #[test]
+    fn new_constructs() {
+        JellyfinClient::new("http://localhost:8096").unwrap();
+    }
+
+    #[tokio::test]
+    async fn is_healthy_returns_true_on_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Healthy"))
+            .mount(&server)
+            .await;
+        assert!(client(&server).is_healthy().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn is_healthy_returns_false_on_503() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        assert!(!client(&server).is_healthy().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn startup_pending_returns_true_on_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Startup/Configuration"))
+            .and(header_exists("X-Emby-Authorization"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        assert!(client(&server).startup_pending().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn startup_pending_returns_false_on_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Startup/Configuration"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        assert!(!client(&server).startup_pending().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn startup_set_user_calls_correct_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Startup/User"))
+            .and(header_exists("X-Emby-Authorization"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).startup_set_user("admin", "pass").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_set_user_returns_error_on_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Startup/User"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .mount(&server)
+            .await;
+        let err = client(&server).startup_set_user("admin", "pass").await.unwrap_err();
+        match err {
+            ApiError::ApiResponse { status, .. } => assert_eq!(status, 400),
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticate_returns_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .and(header_exists("X-Emby-Authorization"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"AccessToken": "tok-abc123"})),
+            )
+            .mount(&server)
+            .await;
+        let token = client(&server).authenticate("admin", "pass").await.unwrap();
+        assert_eq!(token, "tok-abc123");
+    }
+
+    #[tokio::test]
+    async fn authenticate_returns_error_on_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+            .mount(&server)
+            .await;
+        let err = client(&server).authenticate("admin", "wrong").await.unwrap_err();
+        match err {
+            ApiError::ApiResponse { status, .. } => assert_eq!(status, 401),
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_users_returns_user_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .and(header_exists("X-Emby-Authorization"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {"Id": "user-1", "Name": "Admin"},
+                    {"Id": "user-2", "Name": "Guest"},
+                ])),
+            )
+            .mount(&server)
+            .await;
+        let users = client(&server).list_users("my-token").await.unwrap();
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0].id, "user-1");
+        assert_eq!(users[0].name, "Admin");
+    }
+
+    #[tokio::test]
+    async fn set_password_calls_correct_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Users/user-1/Password"))
+            .and(header_exists("X-Emby-Authorization"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).set_password("tok", "user-1", "newpass").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn configure_admin_uses_startup_wizard_when_pending() {
+        let server = MockServer::start().await;
+        // startup_pending → 200 (wizard active)
+        Mock::given(method("GET"))
+            .and(path("/Startup/Configuration"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        // startup_set_user
+        Mock::given(method("POST"))
+            .and(path("/Startup/User"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).configure_admin("admin", "pass").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn configure_admin_changes_password_when_wizard_complete() {
+        let server = MockServer::start().await;
+        // startup_pending → 404 (wizard done)
+        Mock::given(method("GET"))
+            .and(path("/Startup/Configuration"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        // authenticate
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"AccessToken": "tok-xyz"})),
+            )
+            .mount(&server)
+            .await;
+        // list_users
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!([{"Id": "u1", "Name": "admin"}]),
+                ),
+            )
+            .mount(&server)
+            .await;
+        // set_password
+        Mock::given(method("POST"))
+            .and(path("/Users/u1/Password"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        client(&server).configure_admin("admin", "newpass").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn configure_admin_returns_error_when_user_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Startup/Configuration"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"AccessToken": "tok"})),
+            )
+            .mount(&server)
+            .await;
+        // list_users returns a different user
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!([{"Id": "u99", "Name": "someone_else"}]),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let err = client(&server).configure_admin("admin", "pass").await.unwrap_err();
+        match err {
+            ApiError::ApiResponse { status: 404, .. } => {}
+            other => panic!("expected 404, got: {other}"),
+        }
+    }
+}
