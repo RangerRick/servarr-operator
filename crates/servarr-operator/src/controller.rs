@@ -2750,16 +2750,19 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result =
-            update_status(
-                &client,
-                &app,
-                "test",
-                "my-sonarr",
-                StatusConditions { health: None, update: None, admin_creds: None },
-                None,
-            )
-            .await;
+        let result = update_status(
+            &client,
+            &app,
+            "test",
+            "my-sonarr",
+            StatusConditions {
+                health: None,
+                update: None,
+                admin_creds: None,
+            },
+            None,
+        )
+        .await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"
@@ -2824,16 +2827,19 @@ mod tests {
             .mount_as_scoped(&mock_server)
             .await;
 
-        let result =
-            update_status(
-                &client,
-                &app,
-                "test",
-                "my-sonarr",
-                StatusConditions { health: None, update: None, admin_creds: None },
-                None,
-            )
-            .await;
+        let result = update_status(
+            &client,
+            &app,
+            "test",
+            "my-sonarr",
+            StatusConditions {
+                health: None,
+                update: None,
+                admin_creds: None,
+            },
+            None,
+        )
+        .await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"
