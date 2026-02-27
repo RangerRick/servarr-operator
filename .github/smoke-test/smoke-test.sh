@@ -164,8 +164,9 @@ while true; do
   elapsed=$((elapsed + 10))
 done
 
-# Extra dwell time for the operator to finish the credential-sync API calls
-sleep 20
+# Extra dwell time for the operator to finish the credential-sync API calls.
+# Jellyfin's startup wizard can take a moment to respond after first boot.
+sleep 40
 
 # Helper: port-forward to a deployment, run a check function, then clean up.
 # Usage: with_port_forward <deployment> <remote_port> <local_port> <check_fn>
@@ -207,33 +208,40 @@ else
 fi
 
 # --- Transmission: session-set enables RPC auth → no-auth request returns 401,
-#     correct credentials → 409 (session ID handshake, not 401) ---
+#     correct credentials → 409 (session ID handshake, not 401).
+# Retry up to 60s because the operator's credential sync runs asynchronously. ---
 check_transmission_auth() {
   local lport=$1
 
-  # Without auth: expect 401
-  local status_no_auth
-  status_no_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "http://localhost:${lport}/transmission/rpc" \
-    -H 'Content-Type: application/json' \
-    -d '{"method":"session-get"}' 2>/dev/null || echo "000")
+  local deadline=$(( $(date +%s) + 60 ))
+  while true; do
+    # Without auth: expect 401
+    local status_no_auth
+    status_no_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -X POST "http://localhost:${lport}/transmission/rpc" \
+      -H 'Content-Type: application/json' \
+      -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-  # With correct credentials: expect 409 (session ID needed) — not 401
-  local status_with_auth
-  status_with_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "http://localhost:${lport}/transmission/rpc" \
-    -H 'Content-Type: application/json' \
-    -u "${ADMIN_USER}:${ADMIN_PASS}" \
-    -d '{"method":"session-get"}' 2>/dev/null || echo "000")
+    # With correct credentials: expect 409 (session ID needed) — not 401
+    local status_with_auth
+    status_with_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -X POST "http://localhost:${lport}/transmission/rpc" \
+      -H 'Content-Type: application/json' \
+      -u "${ADMIN_USER}:${ADMIN_PASS}" \
+      -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-  if [[ "$status_no_auth" == "401" && "$status_with_auth" == "409" ]]; then
-    echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=409)"
-    return 0
-  else
-    echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=409," \
-         "got no-auth=${status_no_auth} and correct-creds=${status_with_auth})"
-    return 1
-  fi
+    if [[ "$status_no_auth" == "401" && "$status_with_auth" == "409" ]]; then
+      echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=409)"
+      return 0
+    fi
+
+    if [[ $(date +%s) -ge $deadline ]]; then
+      echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=409," \
+           "got no-auth=${status_no_auth} and correct-creds=${status_with_auth})"
+      return 1
+    fi
+    sleep 10
+  done
 }
 
 if with_port_forward media-transmission 9091 29091 check_transmission_auth; then
@@ -243,27 +251,34 @@ else
 fi
 
 # --- Jellyfin: startup wizard set the admin account → credentials authenticate ---
+# Retry up to 60s because the startup wizard may still be processing on first boot.
 check_jellyfin_auth() {
   local lport=$1
   local auth_header
   auth_header='MediaBrowser Client="servarr-operator", Device="servarr-operator",'
   auth_header+=' DeviceId="servarr-operator-device", Version="1.0.0"'
 
-  local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "http://localhost:${lport}/Users/AuthenticateByName" \
-    -H "X-Emby-Authorization: ${auth_header}" \
-    -H 'Content-Type: application/json' \
-    -d "{\"Username\":\"${ADMIN_USER}\",\"Pw\":\"${ADMIN_PASS}\"}" \
-    2>/dev/null || echo "000")
+  local deadline=$(( $(date +%s) + 60 ))
+  while true; do
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -X POST "http://localhost:${lport}/Users/AuthenticateByName" \
+      -H "X-Emby-Authorization: ${auth_header}" \
+      -H 'Content-Type: application/json' \
+      -d "{\"Username\":\"${ADMIN_USER}\",\"Pw\":\"${ADMIN_PASS}\"}" \
+      2>/dev/null || echo "000")
 
-  if [[ "$status" == "200" ]]; then
-    echo "  media-jellyfin: OK (admin credentials authenticate successfully)"
-    return 0
-  else
-    echo "  media-jellyfin: FAIL (expected 200 from AuthenticateByName, got ${status})"
-    return 1
-  fi
+    if [[ "$status" == "200" ]]; then
+      echo "  media-jellyfin: OK (admin credentials authenticate successfully)"
+      return 0
+    fi
+
+    if [[ $(date +%s) -ge $deadline ]]; then
+      echo "  media-jellyfin: FAIL (expected 200 from AuthenticateByName, got ${status})"
+      return 1
+    fi
+    sleep 10
+  done
 }
 
 if with_port_forward media-jellyfin 8096 28096 check_jellyfin_auth; then
