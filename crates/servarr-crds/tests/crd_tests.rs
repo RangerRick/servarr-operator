@@ -375,6 +375,10 @@ fn test_smoke_test_manifests_match_crd() {
             .get("kind")
             .and_then(|k| k.as_str())
             .unwrap_or("ServarrApp");
+        // Skip non-CRD Kubernetes resources (e.g. Secrets) — they have no spec to validate.
+        if matches!(kind, "Secret" | "ConfigMap" | "ServiceAccount") {
+            continue;
+        }
         let spec = doc
             .get("spec")
             .unwrap_or_else(|| panic!("{}: missing 'spec' key", path.display()));
