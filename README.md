@@ -160,7 +160,9 @@ kubectl get pods
 - [Examples](docs/examples.md) -- working YAML for every app type
 - [Networking](docs/networking.md) -- services, Gateway API, TLS, and NetworkPolicy
 - [Backup and Restore](docs/backup-restore.md) -- API-driven and volume-level backups
+- [Admin Credentials](docs/admin-credentials.md) -- declarative admin account management
 - [Troubleshooting](docs/troubleshooting.md) -- common issues and diagnosis
+- [Contributing](docs/contributing.md) -- development setup and CI commit message flags
 
 ## Architecture
 
