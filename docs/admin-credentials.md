@@ -6,10 +6,33 @@ automatically propagates the new credentials without manual intervention.
 
 ---
 
-## Secret Format
+## Creating the Secret
 
-Create a Secret with `username` and `password` keys. The operator reads but never creates or
-modifies this Secret.
+The Secret must have `username` and `password` keys. The operator reads but never creates or
+modifies it — lifecycle is entirely under your control.
+
+### With kubectl
+
+```sh
+kubectl create secret generic media-admin \
+  --namespace servarr-system \
+  --from-literal=username=admin \
+  --from-literal=password=changeme
+```
+
+To use a password from a file (avoids shell history exposure):
+
+```sh
+kubectl create secret generic media-admin \
+  --namespace servarr-system \
+  --from-literal=username=admin \
+  --from-file=password=/path/to/password.txt
+```
+
+### As a YAML manifest
+
+If you prefer to manage secrets declaratively, use `stringData` so the values are not
+base64-encoded in source:
 
 ```yaml
 apiVersion: v1
@@ -20,6 +43,19 @@ metadata:
 stringData:
   username: admin
   password: changeme
+```
+
+Apply it with `kubectl apply -f secret.yaml`. For production use, consider sealing the
+manifest with [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) or storing
+it in an external secrets manager (e.g. External Secrets Operator with Vault or AWS Secrets
+Manager) rather than committing plaintext values.
+
+### Verifying the Secret
+
+```sh
+kubectl get secret media-admin -n servarr-system
+kubectl get secret media-admin -n servarr-system \
+  -o jsonpath='{.data.username}' | base64 -d
 ```
 
 ---
