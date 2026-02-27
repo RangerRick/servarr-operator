@@ -3,6 +3,9 @@ kind: MediaStack
 metadata:
   name: media
 spec:
+  defaults:
+    adminCredentials:
+      secretName: smoke-admin
   apps:
     - app: Jellyfin
     - app: Transmission
