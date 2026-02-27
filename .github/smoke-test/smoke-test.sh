@@ -137,9 +137,11 @@ ADMIN_PASS=$(kubectl get secret smoke-admin -o jsonpath='{.data.password}' | bas
 
 # Wait for the media-* deployments to be ready and for the operator to sync
 # credentials (sync happens after each app passes its health check).
-echo "  Waiting for media-* deployments and credential sync (up to 120s)..."
+# Use a generous timeout: Jellyfin is heavy and the operator may trigger a
+# rolling restart when it first patches the checksum annotation.
+echo "  Waiting for media-* deployments and credential sync (up to 300s)..."
 MEDIA_APPS=(media-sonarr media-jellyfin media-transmission)
-CRED_TIMEOUT=120
+CRED_TIMEOUT=300
 elapsed=0
 while true; do
   all_ready=true

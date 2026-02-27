@@ -361,10 +361,21 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Uses a get-then-create pattern so an existing key is never overwritten.
     ensure_api_key_secret(client, &app, &ns).await?;
 
-    // When adminCredentials is set, patch a checksum annotation onto the pod
-    // template so Kubernetes triggers a rolling update when the secret rotates.
-    // (The actual credential values are injected by secretKeyRef env vars.)
-    if let Some(ref ac) = app.spec.admin_credentials {
+    // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) admin credentials are
+    // injected as secretKeyRef env vars at startup.  Patch a checksum annotation
+    // so Kubernetes rolls the pods when the Secret rotates.
+    //
+    // API-based apps (Jellyfin, Transmission, etc.) get credentials via
+    // sync_admin_credentials on every reconcile — they do NOT need a rolling
+    // restart and must NOT get the checksum annotation (it would cause an
+    // unnecessary restart that delays the startup wizard).
+    let uses_env_var_creds = matches!(
+        app.spec.app,
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
+    );
+    if uses_env_var_creds
+        && let Some(ref ac) = app.spec.admin_credentials
+    {
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
     }
 
