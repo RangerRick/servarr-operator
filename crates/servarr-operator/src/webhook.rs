@@ -300,13 +300,13 @@ fn validate_identity_immutable(
 }
 
 fn validate_admin_credentials(spec: &ServarrAppSpec, errors: &mut Vec<String>) {
-    if let Some(ref ac) = spec.admin_credentials {
-        if ac.secret_name.is_empty() {
-            errors.push(
-                "adminCredentials.secretName must be non-empty when adminCredentials is set"
-                    .to_string(),
-            );
-        }
+    if let Some(ref ac) = spec.admin_credentials
+        && ac.secret_name.is_empty()
+    {
+        errors.push(
+            "adminCredentials.secretName must be non-empty when adminCredentials is set"
+                .to_string(),
+        );
     }
 }
 

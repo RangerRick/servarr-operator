@@ -478,9 +478,11 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         &app,
         &ns,
         &name,
-        health_condition,
-        update_condition,
-        admin_creds_condition,
+        StatusConditions {
+            health: health_condition,
+            update: update_condition,
+            admin_creds: admin_creds_condition,
+        },
         backup_status,
     )
     .await?;
@@ -582,32 +584,30 @@ async fn patch_admin_credentials_checksum(
 ) -> Result<(), Error> {
     use sha2::{Digest, Sha256};
 
-    let username =
-        match servarr_api::read_secret_key(client, ns, secret_name, "username").await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(
-                    app = %app.name_any(),
-                    secret = %secret_name,
-                    error = %e,
-                    "admin-credentials: failed to read secret for checksum"
-                );
-                return Ok(());
-            }
-        };
-    let password =
-        match servarr_api::read_secret_key(client, ns, secret_name, "password").await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(
-                    app = %app.name_any(),
-                    secret = %secret_name,
-                    error = %e,
-                    "admin-credentials: failed to read secret for checksum"
-                );
-                return Ok(());
-            }
-        };
+    let username = match servarr_api::read_secret_key(client, ns, secret_name, "username").await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                app = %app.name_any(),
+                secret = %secret_name,
+                error = %e,
+                "admin-credentials: failed to read secret for checksum"
+            );
+            return Ok(());
+        }
+    };
+    let password = match servarr_api::read_secret_key(client, ns, secret_name, "password").await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                app = %app.name_any(),
+                secret = %secret_name,
+                error = %e,
+                "admin-credentials: failed to read secret for checksum"
+            );
+            return Ok(());
+        }
+    };
 
     let mut hasher = Sha256::new();
     hasher.update(username.as_bytes());
@@ -647,11 +647,7 @@ async fn patch_admin_credentials_checksum(
 /// This function handles the remaining apps via their respective APIs.
 ///
 /// This is idempotent and safe to call on every reconcile cycle.
-async fn sync_admin_credentials(
-    client: &Client,
-    app: &ServarrApp,
-    ns: &str,
-) -> Option<Condition> {
+async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> Option<Condition> {
     let ac = app.spec.admin_credentials.as_ref()?;
     let now = chrono_now();
 
@@ -695,13 +691,16 @@ async fn sync_admin_credentials(
             let api_key = match app.spec.api_key_secret.as_deref() {
                 Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
                     Ok(k) => k,
-                    Err(e) => return Some(Condition {
-                        condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
-                        status: "Unknown".to_string(),
-                        reason: "ApiKeyReadError".to_string(),
-                        message: e.to_string(),
-                        last_transition_time: now,
-                    }),
+                    Err(e) => {
+                        return Some(Condition {
+                            condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED
+                                .to_string(),
+                            status: "Unknown".to_string(),
+                            reason: "ApiKeyReadError".to_string(),
+                            message: e.to_string(),
+                            last_transition_time: now,
+                        });
+                    }
                 },
                 None => {
                     return Some(Condition::fail(
@@ -721,7 +720,8 @@ async fn sync_admin_credentials(
             }
         }
         AppType::Transmission => {
-            match servarr_api::TransmissionClient::new(&base_url, Some(&username), Some(&password)) {
+            match servarr_api::TransmissionClient::new(&base_url, Some(&username), Some(&password))
+            {
                 Ok(c) => c
                     .session_set_auth(&username, &password)
                     .await
@@ -747,13 +747,16 @@ async fn sync_admin_credentials(
             let api_key = match app.spec.api_key_secret.as_deref() {
                 Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
                     Ok(k) => k,
-                    Err(e) => return Some(Condition {
-                        condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
-                        status: "Unknown".to_string(),
-                        reason: "ApiKeyReadError".to_string(),
-                        message: e.to_string(),
-                        last_transition_time: now,
-                    }),
+                    Err(e) => {
+                        return Some(Condition {
+                            condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED
+                                .to_string(),
+                            status: "Unknown".to_string(),
+                            reason: "ApiKeyReadError".to_string(),
+                            message: e.to_string(),
+                            last_transition_time: now,
+                        });
+                    }
                 },
                 None => {
                     return Some(Condition::fail(
@@ -944,16 +947,25 @@ async fn check_update_available(
     })
 }
 
+pub(crate) struct StatusConditions {
+    pub health: Option<Condition>,
+    pub update: Option<Condition>,
+    pub admin_creds: Option<Condition>,
+}
+
 pub(crate) async fn update_status(
     client: &Client,
     app: &ServarrApp,
     ns: &str,
     name: &str,
-    health_condition: Option<Condition>,
-    update_condition: Option<Condition>,
-    admin_creds_condition: Option<Condition>,
+    conditions: StatusConditions,
     backup_status: Option<servarr_crds::BackupStatus>,
 ) -> Result<(), Error> {
+    let StatusConditions {
+        health: health_condition,
+        update: update_condition,
+        admin_creds: admin_creds_condition,
+    } = conditions;
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), ns);
     let (ready, ready_replicas) = match deploy_api.get(name).await {
         Ok(deploy) => {
@@ -2738,7 +2750,16 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None, None).await;
+        let result =
+            update_status(
+                &client,
+                &app,
+                "test",
+                "my-sonarr",
+                StatusConditions { health: None, update: None, admin_creds: None },
+                None,
+            )
+            .await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"
@@ -2803,7 +2824,16 @@ mod tests {
             .mount_as_scoped(&mock_server)
             .await;
 
-        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None, None).await;
+        let result =
+            update_status(
+                &client,
+                &app,
+                "test",
+                "my-sonarr",
+                StatusConditions { health: None, update: None, admin_creds: None },
+                None,
+            )
+            .await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"

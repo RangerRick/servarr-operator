@@ -1131,7 +1131,9 @@ fn test_admin_credentials_propagated_from_defaults() {
     };
     let app = minimal_stack_app(AppType::Sonarr);
     let spec = app.to_servarr_spec(Some(&defaults));
-    let ac = spec.admin_credentials.expect("admin_credentials should be set from defaults");
+    let ac = spec
+        .admin_credentials
+        .expect("admin_credentials should be set from defaults");
     assert_eq!(ac.secret_name, "global-admin");
 }
 
@@ -1148,7 +1150,9 @@ fn test_admin_credentials_app_overrides_defaults() {
         secret_name: "sonarr-admin".into(),
     });
     let spec = app.to_servarr_spec(Some(&defaults));
-    let ac = spec.admin_credentials.expect("admin_credentials should be set");
+    let ac = spec
+        .admin_credentials
+        .expect("admin_credentials should be set");
     assert_eq!(ac.secret_name, "sonarr-admin");
 }
 

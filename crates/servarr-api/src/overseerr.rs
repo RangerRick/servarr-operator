@@ -114,11 +114,7 @@ impl OverseerrClient {
     /// Configure local authentication via `PUT /api/v1/auth/local`.
     ///
     /// Sets the admin username and password for Overseerr's local auth provider.
-    pub async fn setup_local_auth(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), ApiError> {
+    pub async fn setup_local_auth(&self, username: &str, password: &str) -> Result<(), ApiError> {
         let url = format!("{}/api/v1/auth/local", self.config.base_path);
         let body = LocalAuthRequest { username, password };
         let resp = self
@@ -128,7 +124,10 @@ impl OverseerrClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ApiError::ApiResponse { status: 0, body: e.to_string() })?;
+            .map_err(|e| ApiError::ApiResponse {
+                status: 0,
+                body: e.to_string(),
+            })?;
         if resp.status().is_success() {
             Ok(())
         } else {

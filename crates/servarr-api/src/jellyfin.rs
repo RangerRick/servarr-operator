@@ -84,13 +84,12 @@ impl JellyfinClient {
     }
 
     /// Set the initial admin user via the startup wizard (`POST /Startup/User`).
-    pub async fn startup_set_user(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), ApiError> {
+    pub async fn startup_set_user(&self, username: &str, password: &str) -> Result<(), ApiError> {
         let url = self.http.base_url().join("/Startup/User")?;
-        let body = StartupUserRequest { name: username, password };
+        let body = StartupUserRequest {
+            name: username,
+            password,
+        };
         let resp = self
             .http
             .inner()
@@ -110,13 +109,12 @@ impl JellyfinClient {
     }
 
     /// Authenticate as a user and return the access token.
-    pub async fn authenticate(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<String, ApiError> {
+    pub async fn authenticate(&self, username: &str, password: &str) -> Result<String, ApiError> {
         let url = self.http.base_url().join("/Users/AuthenticateByName")?;
-        let body = AuthenticateRequest { username, pw: password };
+        let body = AuthenticateRequest {
+            username,
+            pw: password,
+        };
         let resp = self
             .http
             .inner()
@@ -202,11 +200,7 @@ impl JellyfinClient {
     ///
     /// If the startup wizard is pending, sets the initial admin via the wizard.
     /// Otherwise, authenticates as the existing admin and changes the password.
-    pub async fn configure_admin(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), ApiError> {
+    pub async fn configure_admin(&self, username: &str, password: &str) -> Result<(), ApiError> {
         if self.startup_pending().await? {
             return self.startup_set_user(username, password).await;
         }

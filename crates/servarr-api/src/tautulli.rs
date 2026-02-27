@@ -24,11 +24,7 @@ impl TautulliClient {
     /// Set admin credentials via the `set_credentials` command.
     ///
     /// Calls `GET /api/v2?cmd=set_credentials&username=...&password=...`.
-    pub async fn set_credentials(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), ApiError> {
+    pub async fn set_credentials(&self, username: &str, password: &str) -> Result<(), ApiError> {
         let mut url = self.http.base_url().clone();
         url.query_pairs_mut()
             .append_pair("cmd", "set_credentials")

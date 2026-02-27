@@ -3270,8 +3270,7 @@ fn find_env<'a>(
 }
 
 fn get_env(app: &ServarrApp) -> Vec<k8s_openapi::api::core::v1::EnvVar> {
-    let deploy =
-        servarr_resources::deployment::build(app, &std::collections::HashMap::new());
+    let deploy = servarr_resources::deployment::build(app, &std::collections::HashMap::new());
     deploy
         .spec
         .unwrap()
@@ -3313,8 +3312,14 @@ fn test_admin_credentials_sonarr_injects_env_vars() {
             .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
         Some("Forms".into())
     );
-    assert_eq!(secret_key_ref_name(&env, "SONARR__AUTH__USERNAME"), Some("my-admin".into()));
-    assert_eq!(secret_key_ref_name(&env, "SONARR__AUTH__PASSWORD"), Some("my-admin".into()));
+    assert_eq!(
+        secret_key_ref_name(&env, "SONARR__AUTH__USERNAME"),
+        Some("my-admin".into())
+    );
+    assert_eq!(
+        secret_key_ref_name(&env, "SONARR__AUTH__PASSWORD"),
+        Some("my-admin".into())
+    );
 }
 
 #[test]

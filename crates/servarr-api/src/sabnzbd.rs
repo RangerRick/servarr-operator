@@ -111,11 +111,7 @@ impl SabnzbdClient {
     }
 
     /// Set the admin username and password via the `set_config` API.
-    pub async fn set_credentials(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), ApiError> {
+    pub async fn set_credentials(&self, username: &str, password: &str) -> Result<(), ApiError> {
         self.set_config("misc", "username", username).await?;
         self.set_config("misc", "password", password).await?;
         Ok(())
