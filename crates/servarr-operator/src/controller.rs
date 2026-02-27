@@ -629,11 +629,7 @@ async fn patch_admin_credentials_checksum(
         }
     });
     deploy_api
-        .patch(
-            &name,
-            &PatchParams::apply(FIELD_MANAGER).force(),
-            &Patch::Apply(patch),
-        )
+        .patch(&name, &PatchParams::default(), &Patch::Merge(patch))
         .await
         .map_err(Error::Kube)?;
 
