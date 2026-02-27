@@ -7,6 +7,7 @@ pub mod plex;
 pub mod prowlarr;
 pub mod sabnzbd;
 pub mod servarr_v3;
+pub mod tautulli;
 pub mod transmission;
 
 pub use client::{ApiError, HttpClient};
@@ -18,4 +19,5 @@ pub use plex::PlexClient;
 pub use prowlarr::ProwlarrClient;
 pub use sabnzbd::SabnzbdClient;
 pub use servarr_v3::{AppKind, ServarrClient};
+pub use tautulli::TautulliClient;
 pub use transmission::TransmissionClient;

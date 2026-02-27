@@ -3257,3 +3257,138 @@ fn test_deployment_user_node_selector_preserved_with_gpu() {
         Some("my-node")
     );
 }
+
+// ---------------------------------------------------------------------------
+// adminCredentials env var injection
+// ---------------------------------------------------------------------------
+
+fn find_env<'a>(
+    env: &'a [k8s_openapi::api::core::v1::EnvVar],
+    name: &str,
+) -> Option<&'a k8s_openapi::api::core::v1::EnvVar> {
+    env.iter().find(|e| e.name == name)
+}
+
+fn get_env(app: &ServarrApp) -> Vec<k8s_openapi::api::core::v1::EnvVar> {
+    let deploy =
+        servarr_resources::deployment::build(app, &std::collections::HashMap::new());
+    deploy
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap()
+        .containers
+        .into_iter()
+        .next()
+        .unwrap()
+        .env
+        .unwrap_or_default()
+}
+
+fn secret_key_ref_name(
+    env: &[k8s_openapi::api::core::v1::EnvVar],
+    var_name: &str,
+) -> Option<String> {
+    find_env(env, var_name).and_then(|e| {
+        e.value_from
+            .as_ref()
+            .and_then(|vf| vf.secret_key_ref.as_ref())
+            .map(|skr| skr.name.clone())
+    })
+}
+
+#[test]
+fn test_admin_credentials_sonarr_injects_env_vars() {
+    let mut app = make_app(AppType::Sonarr);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "my-admin".into(),
+    });
+    let env = get_env(&app);
+
+    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_some());
+    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_some());
+    assert_eq!(
+        find_env(&env, "SONARR__AUTH__METHOD")
+            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
+        Some("Forms".into())
+    );
+    assert_eq!(secret_key_ref_name(&env, "SONARR__AUTH__USERNAME"), Some("my-admin".into()));
+    assert_eq!(secret_key_ref_name(&env, "SONARR__AUTH__PASSWORD"), Some("my-admin".into()));
+}
+
+#[test]
+fn test_admin_credentials_radarr_injects_env_vars() {
+    let mut app = make_app(AppType::Radarr);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "radarr-creds".into(),
+    });
+    let env = get_env(&app);
+
+    assert!(find_env(&env, "RADARR__AUTH__USERNAME").is_some());
+    assert!(find_env(&env, "RADARR__AUTH__PASSWORD").is_some());
+    assert_eq!(
+        find_env(&env, "RADARR__AUTH__METHOD")
+            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
+        Some("Forms".into())
+    );
+}
+
+#[test]
+fn test_admin_credentials_lidarr_injects_env_vars() {
+    let mut app = make_app(AppType::Lidarr);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "lidarr-creds".into(),
+    });
+    let env = get_env(&app);
+
+    assert!(find_env(&env, "LIDARR__AUTH__USERNAME").is_some());
+    assert!(find_env(&env, "LIDARR__AUTH__PASSWORD").is_some());
+    assert_eq!(
+        find_env(&env, "LIDARR__AUTH__METHOD")
+            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
+        Some("Forms".into())
+    );
+}
+
+#[test]
+fn test_admin_credentials_prowlarr_injects_env_vars() {
+    let mut app = make_app(AppType::Prowlarr);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "prowlarr-creds".into(),
+    });
+    let env = get_env(&app);
+
+    assert!(find_env(&env, "PROWLARR__AUTH__USERNAME").is_some());
+    assert!(find_env(&env, "PROWLARR__AUTH__PASSWORD").is_some());
+    assert_eq!(
+        find_env(&env, "PROWLARR__AUTH__METHOD")
+            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
+        Some("Forms".into())
+    );
+}
+
+#[test]
+fn test_admin_credentials_non_servarr_no_env_vars() {
+    let mut app = make_app(AppType::Transmission);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "creds".into(),
+    });
+    let env = get_env(&app);
+
+    // Transmission credentials are handled via API, not env vars
+    assert!(find_env(&env, "TRANSMISSION__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "TRANSMISSION__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "TRANSMISSION__AUTH__METHOD").is_none());
+}
+
+#[test]
+fn test_admin_credentials_not_set_no_auth_env_vars() {
+    let app = make_app(AppType::Sonarr);
+    // admin_credentials defaults to None
+    let env = get_env(&app);
+
+    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__METHOD").is_none());
+}

@@ -62,6 +62,7 @@ fn test_child_name_without_instance() {
         gpu: None,
         prowlarr_sync: None,
         overseerr_sync: None,
+        admin_credentials: None,
         split4k: None,
         split4k_overrides: None,
     };
@@ -96,6 +97,7 @@ fn test_child_name_with_instance() {
         gpu: None,
         prowlarr_sync: None,
         overseerr_sync: None,
+        admin_credentials: None,
         split4k: None,
         split4k_overrides: None,
     };
@@ -133,6 +135,7 @@ fn minimal_stack_app(app: AppType) -> StackApp {
         gpu: None,
         prowlarr_sync: None,
         overseerr_sync: None,
+        admin_credentials: None,
         split4k: None,
         split4k_overrides: None,
     }
@@ -351,6 +354,7 @@ fn test_media_stack_serde_roundtrip() {
                 gpu: None,
                 prowlarr_sync: None,
                 overseerr_sync: None,
+                admin_credentials: None,
                 split4k: None,
                 split4k_overrides: None,
             },
@@ -380,6 +384,7 @@ fn test_media_stack_serde_roundtrip() {
                 gpu: None,
                 prowlarr_sync: None,
                 overseerr_sync: None,
+                admin_credentials: None,
                 split4k: None,
                 split4k_overrides: None,
             },
@@ -1110,4 +1115,98 @@ fn test_media_stack_spec_nfs_field_round_trips() {
     assert!(nfs.enabled);
     assert_eq!(nfs.storage_size, "500Gi");
     assert_eq!(nfs.storage_class.as_deref(), Some("nfs-fast"));
+}
+
+// ---------------------------------------------------------------------------
+// adminCredentials propagation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_admin_credentials_propagated_from_defaults() {
+    let defaults = StackDefaults {
+        admin_credentials: Some(AdminCredentialsSpec {
+            secret_name: "global-admin".into(),
+        }),
+        ..Default::default()
+    };
+    let app = minimal_stack_app(AppType::Sonarr);
+    let spec = app.to_servarr_spec(Some(&defaults));
+    let ac = spec.admin_credentials.expect("admin_credentials should be set from defaults");
+    assert_eq!(ac.secret_name, "global-admin");
+}
+
+#[test]
+fn test_admin_credentials_app_overrides_defaults() {
+    let defaults = StackDefaults {
+        admin_credentials: Some(AdminCredentialsSpec {
+            secret_name: "global-admin".into(),
+        }),
+        ..Default::default()
+    };
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "sonarr-admin".into(),
+    });
+    let spec = app.to_servarr_spec(Some(&defaults));
+    let ac = spec.admin_credentials.expect("admin_credentials should be set");
+    assert_eq!(ac.secret_name, "sonarr-admin");
+}
+
+#[test]
+fn test_admin_credentials_none_when_unset() {
+    let app = minimal_stack_app(AppType::Radarr);
+    let spec = app.to_servarr_spec(None);
+    assert!(spec.admin_credentials.is_none());
+}
+
+#[test]
+fn test_admin_credentials_split4k_override() {
+    let defaults = StackDefaults {
+        admin_credentials: Some(AdminCredentialsSpec {
+            secret_name: "global-admin".into(),
+        }),
+        ..Default::default()
+    };
+    let mut app = minimal_stack_app(AppType::Sonarr);
+    app.split4k = Some(true);
+    app.split4k_overrides = Some(Split4kOverrides {
+        admin_credentials: Some(AdminCredentialsSpec {
+            secret_name: "4k-admin".into(),
+        }),
+        ..Default::default()
+    });
+
+    let pairs = app
+        .expand("test-stack", "test-ns", Some(&defaults), None)
+        .expect("expand should succeed");
+
+    // Standard instance uses global-admin from defaults
+    let std_pair = pairs
+        .iter()
+        .find(|(name, _spec)| !name.contains("4k"))
+        .unwrap();
+    assert_eq!(
+        std_pair.1.admin_credentials.as_ref().unwrap().secret_name,
+        "global-admin"
+    );
+
+    // 4K instance uses the override
+    let k4_pair = pairs
+        .iter()
+        .find(|(name, _spec)| name.contains("4k"))
+        .unwrap();
+    assert_eq!(
+        k4_pair.1.admin_credentials.as_ref().unwrap().secret_name,
+        "4k-admin"
+    );
+}
+
+#[test]
+fn test_admin_credentials_serde_roundtrip() {
+    let ac = AdminCredentialsSpec {
+        secret_name: "my-admin-secret".into(),
+    };
+    let json = serde_json::to_string(&ac).unwrap();
+    let deserialized: AdminCredentialsSpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.secret_name, "my-admin-secret");
 }

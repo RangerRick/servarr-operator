@@ -103,6 +103,15 @@ pub struct ServarrAppSpec {
     /// Overseerr cross-app synchronization. Only applies to Overseerr-type apps.
     #[serde(default)]
     pub overseerr_sync: Option<OverseerrSyncSpec>,
+
+    /// Admin credentials for this app. References a user-created Kubernetes Secret
+    /// with `username` and `password` keys. The operator reads but never owns this secret.
+    ///
+    /// For Sonarr, Radarr, Lidarr, and Prowlarr: injected as `APP__AUTH__USERNAME`,
+    /// `APP__AUTH__PASSWORD`, and `APP__AUTH__METHOD=Forms` env vars (requires restart).
+    /// For other apps: applied via live API calls on every reconcile.
+    #[serde(default)]
+    pub admin_credentials: Option<AdminCredentialsSpec>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]

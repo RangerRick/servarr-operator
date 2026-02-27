@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use crate::client::ApiError;
 
 /// Client for the Overseerr settings API.
@@ -6,6 +8,13 @@ use crate::client::ApiError;
 /// in Overseerr for media request routing.
 pub struct OverseerrClient {
     config: overseerr::apis::configuration::Configuration,
+}
+
+/// Request body for `PUT /api/v1/auth/local`.
+#[derive(Serialize)]
+struct LocalAuthRequest<'a> {
+    username: &'a str,
+    password: &'a str,
 }
 
 fn map_err<E: std::fmt::Debug>(e: overseerr::apis::Error<E>) -> ApiError {
@@ -100,6 +109,33 @@ impl OverseerrClient {
             .await
             .map_err(map_err)
             .map(|_| ())
+    }
+
+    /// Configure local authentication via `PUT /api/v1/auth/local`.
+    ///
+    /// Sets the admin username and password for Overseerr's local auth provider.
+    pub async fn setup_local_auth(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<(), ApiError> {
+        let url = format!("{}/api/v1/auth/local", self.config.base_path);
+        let body = LocalAuthRequest { username, password };
+        let resp = self
+            .config
+            .client
+            .put(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ApiError::ApiResponse { status: 0, body: e.to_string() })?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::ApiResponse { status, body })
+        }
     }
 }
 

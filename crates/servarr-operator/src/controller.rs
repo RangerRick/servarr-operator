@@ -9,6 +9,7 @@ use k8s_openapi::api::networking::v1::NetworkPolicy;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder};
+use kube::runtime::reflector::{self, ObjectRef};
 use kube::runtime::watcher;
 use kube::{Client, CustomResourceExt, Resource, ResourceExt};
 use servarr_api::AppKind;
@@ -53,21 +54,45 @@ pub fn print_crd() -> Result<()> {
 pub async fn run(client: kube::Client, server_state: crate::server::ServerState) -> Result<()> {
     let ctx = Arc::new(Context::new(client.clone()));
 
-    let (apps, deployments, services, config_maps) = if let Some(ref ns) = ctx.watch_namespace {
-        (
-            Api::<ServarrApp>::namespaced(client.clone(), ns),
-            Api::<Deployment>::namespaced(client.clone(), ns),
-            Api::<Service>::namespaced(client.clone(), ns),
-            Api::<ConfigMap>::namespaced(client.clone(), ns),
-        )
+    let (apps, deployments, services, config_maps, secrets) =
+        if let Some(ref ns) = ctx.watch_namespace {
+            (
+                Api::<ServarrApp>::namespaced(client.clone(), ns),
+                Api::<Deployment>::namespaced(client.clone(), ns),
+                Api::<Service>::namespaced(client.clone(), ns),
+                Api::<ConfigMap>::namespaced(client.clone(), ns),
+                Api::<Secret>::namespaced(client.clone(), ns),
+            )
+        } else {
+            (
+                Api::<ServarrApp>::all(client.clone()),
+                Api::<Deployment>::all(client.clone()),
+                Api::<Service>::all(client.clone()),
+                Api::<ConfigMap>::all(client.clone()),
+                Api::<Secret>::all(client.clone()),
+            )
+        };
+
+    // Build a reflector store so the secret watcher mapper can look up which
+    // ServarrApps reference a changed secret without an async API call.
+    let (app_store, app_writer) = reflector::store::<ServarrApp>();
+    let app_store_for_watcher = app_store.clone();
+
+    // Background task: keep the store up-to-date by watching ServarrApps.
+    // This runs independently of the Controller's own internal watcher.
+    let apps_for_reflector = if let Some(ref ns) = ctx.watch_namespace {
+        Api::<ServarrApp>::namespaced(client.clone(), ns)
     } else {
-        (
-            Api::<ServarrApp>::all(client.clone()),
-            Api::<Deployment>::all(client.clone()),
-            Api::<Service>::all(client.clone()),
-            Api::<ConfigMap>::all(client.clone()),
-        )
+        Api::<ServarrApp>::all(client.clone())
     };
+    tokio::spawn(async move {
+        reflector::reflector(
+            app_writer,
+            watcher::watcher(apps_for_reflector, watcher::Config::default()),
+        )
+        .for_each(|_| std::future::ready(()))
+        .await;
+    });
 
     info!("Starting Servarr Operator controller");
     server_state.set_ready();
@@ -76,6 +101,22 @@ pub async fn run(client: kube::Client, server_state: crate::server::ServerState)
         .owns(deployments, watcher::Config::default())
         .owns(services, watcher::Config::default())
         .owns(config_maps, watcher::Config::default())
+        // Watch admin-credential secrets: when a secret changes, enqueue all
+        // ServarrApps that reference it so credential rotation propagates immediately.
+        .watches(secrets, watcher::Config::default(), move |secret| {
+            let secret_name = secret.name_any();
+            app_store_for_watcher
+                .state()
+                .into_iter()
+                .filter(move |app| {
+                    app.spec
+                        .admin_credentials
+                        .as_ref()
+                        .is_some_and(|ac| ac.secret_name == secret_name)
+                })
+                .map(|app| ObjectRef::from_obj(&*app))
+                .collect::<Vec<_>>()
+        })
         .shutdown_on_signal()
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
@@ -320,6 +361,13 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Uses a get-then-create pattern so an existing key is never overwritten.
     ensure_api_key_secret(client, &app, &ns).await?;
 
+    // When adminCredentials is set, patch a checksum annotation onto the pod
+    // template so Kubernetes triggers a rolling update when the secret rotates.
+    // (The actual credential values are injected by secretKeyRef env vars.)
+    if let Some(ref ac) = app.spec.admin_credentials {
+        patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
+    }
+
     // Build and apply SSH bastion authorized-keys Secret
     if let Some(secret) = servarr_resources::secret::build_authorized_keys(&app) {
         let secret_name = secret.metadata.name.as_deref().unwrap_or(&name);
@@ -396,6 +444,9 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // API health check and update check (non-blocking)
     let (health_condition, update_condition) = check_api_health(client, &app, &ns).await;
 
+    // Admin credential sync via live API (SABnzbd, Transmission, Jellyfin, Tautulli, Overseerr)
+    let admin_creds_condition = sync_admin_credentials(client, &app, &ns).await;
+
     // Backup scheduling (non-blocking)
     let backup_status = maybe_run_backup(client, &app, &ns, &recorder, &obj_ref).await;
 
@@ -429,6 +480,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         &name,
         health_condition,
         update_condition,
+        admin_creds_condition,
         backup_status,
     )
     .await?;
@@ -517,6 +569,228 @@ async fn ensure_api_key_secret(client: &Client, app: &ServarrApp, ns: &str) -> R
     Ok(())
 }
 
+/// Patch a SHA-256 checksum of the admin credentials onto the pod template annotation.
+///
+/// When the referenced Secret rotates, the annotation changes, which causes
+/// Kubernetes to perform a rolling update of the Deployment so pods restart
+/// with the new `secretKeyRef` env var values.
+async fn patch_admin_credentials_checksum(
+    client: &Client,
+    app: &ServarrApp,
+    ns: &str,
+    secret_name: &str,
+) -> Result<(), Error> {
+    use sha2::{Digest, Sha256};
+
+    let username =
+        match servarr_api::read_secret_key(client, ns, secret_name, "username").await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    app = %app.name_any(),
+                    secret = %secret_name,
+                    error = %e,
+                    "admin-credentials: failed to read secret for checksum"
+                );
+                return Ok(());
+            }
+        };
+    let password =
+        match servarr_api::read_secret_key(client, ns, secret_name, "password").await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    app = %app.name_any(),
+                    secret = %secret_name,
+                    error = %e,
+                    "admin-credentials: failed to read secret for checksum"
+                );
+                return Ok(());
+            }
+        };
+
+    let mut hasher = Sha256::new();
+    hasher.update(username.as_bytes());
+    hasher.update(b":");
+    hasher.update(password.as_bytes());
+    let checksum = format!("{:x}", hasher.finalize());
+
+    let name = app.name_any();
+    let deploy_api = Api::<Deployment>::namespaced(client.clone(), ns);
+    let patch = serde_json::json!({
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "servarr.dev/admin-credentials-checksum": checksum
+                    }
+                }
+            }
+        }
+    });
+    deploy_api
+        .patch(
+            &name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(patch),
+        )
+        .await
+        .map_err(Error::Kube)?;
+
+    Ok(())
+}
+
+/// Sync admin credentials to apps that support live credential updates.
+///
+/// Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) receive credentials via env
+/// vars at startup — handled by the deployment builder and checksum annotation.
+/// This function handles the remaining apps via their respective APIs.
+///
+/// This is idempotent and safe to call on every reconcile cycle.
+async fn sync_admin_credentials(
+    client: &Client,
+    app: &ServarrApp,
+    ns: &str,
+) -> Option<Condition> {
+    let ac = app.spec.admin_credentials.as_ref()?;
+    let now = chrono_now();
+
+    let username = match servarr_api::read_secret_key(client, ns, &ac.secret_name, "username").await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(app = %app.name_any(), error = %e, "admin-credentials: failed to read username");
+            return Some(Condition {
+                condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
+                status: "Unknown".to_string(),
+                reason: "SecretReadError".to_string(),
+                message: e.to_string(),
+                last_transition_time: now,
+            });
+        }
+    };
+    let password = match servarr_api::read_secret_key(client, ns, &ac.secret_name, "password").await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(app = %app.name_any(), error = %e, "admin-credentials: failed to read password");
+            return Some(Condition {
+                condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
+                status: "Unknown".to_string(),
+                reason: "SecretReadError".to_string(),
+                message: e.to_string(),
+                last_transition_time: now,
+            });
+        }
+    };
+
+    let app_name = servarr_resources::common::app_name(app);
+    let defaults = servarr_crds::AppDefaults::for_app(&app.spec.app);
+    let svc_spec = app.spec.service.as_ref().unwrap_or(&defaults.service);
+    let port = svc_spec.ports.first().map(|p| p.port).unwrap_or(80);
+    let base_url = format!("http://{app_name}.{ns}.svc:{port}");
+
+    let result: Result<(), String> = match app.spec.app {
+        AppType::Sabnzbd => {
+            let api_key = match app.spec.api_key_secret.as_deref() {
+                Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
+                    Ok(k) => k,
+                    Err(e) => return Some(Condition {
+                        condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
+                        status: "Unknown".to_string(),
+                        reason: "ApiKeyReadError".to_string(),
+                        message: e.to_string(),
+                        last_transition_time: now,
+                    }),
+                },
+                None => {
+                    return Some(Condition::fail(
+                        condition_types::ADMIN_CREDENTIALS_CONFIGURED,
+                        "NoApiKey",
+                        "SABnzbd credential sync requires apiKeySecret to be set",
+                        &now,
+                    ));
+                }
+            };
+            match servarr_api::SabnzbdClient::new(&base_url, &api_key) {
+                Ok(c) => c
+                    .set_credentials(&username, &password)
+                    .await
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        AppType::Transmission => {
+            match servarr_api::TransmissionClient::new(&base_url, Some(&username), Some(&password)) {
+                Ok(c) => c
+                    .session_set_auth(&username, &password)
+                    .await
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        AppType::Jellyfin => match servarr_api::JellyfinClient::new(&base_url) {
+            Ok(c) => c
+                .configure_admin(&username, &password)
+                .await
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        },
+        AppType::Tautulli => match servarr_api::TautulliClient::new(&base_url) {
+            Ok(c) => c
+                .set_credentials(&username, &password)
+                .await
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        },
+        AppType::Overseerr => {
+            let api_key = match app.spec.api_key_secret.as_deref() {
+                Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
+                    Ok(k) => k,
+                    Err(e) => return Some(Condition {
+                        condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED.to_string(),
+                        status: "Unknown".to_string(),
+                        reason: "ApiKeyReadError".to_string(),
+                        message: e.to_string(),
+                        last_transition_time: now,
+                    }),
+                },
+                None => {
+                    return Some(Condition::fail(
+                        condition_types::ADMIN_CREDENTIALS_CONFIGURED,
+                        "NoApiKey",
+                        "Overseerr credential sync requires apiKeySecret to be set",
+                        &now,
+                    ));
+                }
+            };
+            let c = servarr_api::OverseerrClient::new(&base_url, &api_key);
+            c.setup_local_auth(&username, &password)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        // Servarr v3 apps: handled by env vars + checksum annotation (see deployment builder)
+        // Plex: uses plex.tv account auth, not configurable via operator
+        // Maintainerr: no credential API exposed
+        _ => return None,
+    };
+
+    Some(match result {
+        Ok(()) => Condition::ok(
+            condition_types::ADMIN_CREDENTIALS_CONFIGURED,
+            "Configured",
+            "Admin credentials applied successfully",
+            &now,
+        ),
+        Err(msg) => Condition::fail(
+            condition_types::ADMIN_CREDENTIALS_CONFIGURED,
+            "SyncFailed",
+            &msg,
+            &now,
+        ),
+    })
+}
+
 pub(crate) async fn check_api_health(
     client: &Client,
     app: &ServarrApp,
@@ -577,7 +851,24 @@ pub(crate) async fn check_api_health(
             Err(e) => (Err(e.to_string()), None),
         },
         AppType::Transmission => {
-            match servarr_api::TransmissionClient::new(&base_url, None, None) {
+            // Pass credentials to the health check client when adminCredentials is set.
+            let (tx_user, tx_pass): (Option<String>, Option<String>) =
+                if let Some(ref ac) = app.spec.admin_credentials {
+                    let u = servarr_api::read_secret_key(client, ns, &ac.secret_name, "username")
+                        .await
+                        .ok();
+                    let p = servarr_api::read_secret_key(client, ns, &ac.secret_name, "password")
+                        .await
+                        .ok();
+                    (u, p)
+                } else {
+                    (None, None)
+                };
+            match servarr_api::TransmissionClient::new(
+                &base_url,
+                tx_user.as_deref(),
+                tx_pass.as_deref(),
+            ) {
                 Ok(c) => {
                     let h = c.is_healthy().await.map_err(|e| e.to_string());
                     (h, None)
@@ -660,6 +951,7 @@ pub(crate) async fn update_status(
     name: &str,
     health_condition: Option<Condition>,
     update_condition: Option<Condition>,
+    admin_creds_condition: Option<Condition>,
     backup_status: Option<servarr_crds::BackupStatus>,
 ) -> Result<(), Error> {
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), ns);
@@ -758,6 +1050,10 @@ pub(crate) async fn update_status(
     }
     // Update available condition
     if let Some(cond) = update_condition {
+        status.set_condition(cond);
+    }
+    // Admin credentials condition
+    if let Some(cond) = admin_creds_condition {
         status.set_condition(cond);
     }
 
@@ -2442,7 +2738,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None).await;
+        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None, None).await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"
@@ -2507,7 +2803,7 @@ mod tests {
             .mount_as_scoped(&mock_server)
             .await;
 
-        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None).await;
+        let result = update_status(&client, &app, "test", "my-sonarr", None, None, None, None).await;
         assert!(
             result.is_ok(),
             "update_status should succeed, got: {result:?}"

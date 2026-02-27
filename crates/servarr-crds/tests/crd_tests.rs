@@ -125,6 +125,7 @@ fn test_crd_serde_roundtrip_all_fields() {
         gpu: None,
         prowlarr_sync: None,
         overseerr_sync: None,
+        admin_credentials: None,
     };
 
     let json = serde_json::to_string_pretty(&spec).unwrap();

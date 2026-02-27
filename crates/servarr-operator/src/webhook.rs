@@ -254,6 +254,9 @@ async fn validate_spec(
     // Rule 10: SSH bastion shell overrides not allowed in restricted modes
     validate_ssh_shell_override(&parsed, &mut errors);
 
+    // Rule 11: adminCredentials.secretName must be non-empty when set
+    validate_admin_credentials(&parsed, &mut errors);
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -292,6 +295,17 @@ fn validate_identity_immutable(
                 "spec.instance is immutable (was {:?}, got {:?})",
                 old.instance, spec.instance
             ));
+        }
+    }
+}
+
+fn validate_admin_credentials(spec: &ServarrAppSpec, errors: &mut Vec<String>) {
+    if let Some(ref ac) = spec.admin_credentials {
+        if ac.secret_name.is_empty() {
+            errors.push(
+                "adminCredentials.secretName must be non-empty when adminCredentials is set"
+                    .to_string(),
+            );
         }
     }
 }

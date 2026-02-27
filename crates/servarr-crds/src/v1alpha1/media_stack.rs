@@ -75,6 +75,8 @@ pub struct StackDefaults {
     pub image_pull_secrets: Option<Vec<String>>,
     #[serde(default)]
     pub pod_annotations: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub admin_credentials: Option<AdminCredentialsSpec>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,8 @@ pub struct StackApp {
     pub prowlarr_sync: Option<ProwlarrSyncSpec>,
     #[serde(default)]
     pub overseerr_sync: Option<OverseerrSyncSpec>,
+    #[serde(default)]
+    pub admin_credentials: Option<AdminCredentialsSpec>,
 
     /// When true, creates both a standard and a 4K instance of this app.
     /// Only valid for Sonarr and Radarr.
@@ -168,6 +172,8 @@ pub struct Split4kOverrides {
     pub service: Option<ServiceSpec>,
     #[serde(default)]
     pub gateway: Option<GatewaySpec>,
+    #[serde(default)]
+    pub admin_credentials: Option<AdminCredentialsSpec>,
 }
 
 fn default_enabled() -> bool {
@@ -247,6 +253,9 @@ impl StackApp {
                 if overrides.gateway.is_some() {
                     four_k_app.gateway = overrides.gateway.clone();
                 }
+                if overrides.admin_credentials.is_some() {
+                    four_k_app.admin_credentials = overrides.admin_credentials.clone();
+                }
             }
 
             let mut four_k_spec = four_k_app.to_servarr_spec(defaults);
@@ -301,6 +310,7 @@ impl StackApp {
             gpu: self.gpu.clone(),
             prowlarr_sync: self.prowlarr_sync.clone(),
             overseerr_sync: self.overseerr_sync.clone(),
+            admin_credentials: self.admin_credentials.clone().or(d.admin_credentials),
         }
     }
 }

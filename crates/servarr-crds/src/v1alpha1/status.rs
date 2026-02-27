@@ -66,6 +66,7 @@ pub mod condition_types {
     pub const DEGRADED: &str = "Degraded";
     pub const APP_HEALTHY: &str = "AppHealthy";
     pub const UPDATE_AVAILABLE: &str = "UpdateAvailable";
+    pub const ADMIN_CREDENTIALS_CONFIGURED: &str = "AdminCredentialsConfigured";
 }
 
 impl Condition {

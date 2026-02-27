@@ -672,6 +672,17 @@ fn default_external_path() -> String {
     "/".to_string()
 }
 
+/// Reference to a user-created Kubernetes Secret containing admin credentials.
+///
+/// The operator reads but never creates or owns this secret. It must have
+/// `username` and `password` keys.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCredentialsSpec {
+    /// Name of a Kubernetes Secret containing `username` and `password` keys.
+    pub secret_name: String,
+}
+
 fn json_object_schema(_gen: &mut SchemaGenerator) -> Schema {
     json_schema!({ "type": "object" })
 }

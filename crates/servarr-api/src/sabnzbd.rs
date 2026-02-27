@@ -92,6 +92,34 @@ impl SabnzbdClient {
             ))
             .await
     }
+
+    /// Set a single misc config value via `set_config`.
+    ///
+    /// Calls `?mode=set_config&section={section}&keyword={keyword}&value={value}&apikey={key}&output=json`.
+    pub async fn set_config(
+        &self,
+        section: &str,
+        keyword: &str,
+        value: &str,
+    ) -> Result<(), ApiError> {
+        let path = format!(
+            "?mode=set_config&section={section}&keyword={keyword}&value={value}&apikey={}&output=json",
+            self.api_key
+        );
+        let _resp: serde_json::Value = self.http.get(&path).await?;
+        Ok(())
+    }
+
+    /// Set the admin username and password via the `set_config` API.
+    pub async fn set_credentials(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<(), ApiError> {
+        self.set_config("misc", "username", username).await?;
+        self.set_config("misc", "password", password).await?;
+        Ok(())
+    }
 }
 
 impl HealthCheck for SabnzbdClient {

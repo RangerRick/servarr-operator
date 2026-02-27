@@ -113,6 +113,22 @@ impl TransmissionClient {
         self.rpc_call("session-stats", None).await
     }
 
+    /// Set authentication credentials via `session-set`.
+    ///
+    /// Enables RPC authentication and sets the username and password.
+    /// Note: the new credentials only take effect after a Transmission restart
+    /// or when the client reconnects. Create a new `TransmissionClient` with
+    /// the updated credentials for subsequent calls.
+    pub async fn session_set_auth(&self, username: &str, password: &str) -> Result<(), ApiError> {
+        let args = serde_json::json!({
+            "rpc-authentication-required": true,
+            "rpc-username": username,
+            "rpc-password": password,
+        });
+        let _: serde_json::Value = self.rpc_call("session-set", Some(args)).await?;
+        Ok(())
+    }
+
     /// Execute an RPC call, handling the session-ID handshake automatically.
     async fn rpc_call<T: serde::de::DeserializeOwned>(
         &self,
