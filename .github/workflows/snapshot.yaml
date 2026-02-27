@@ -2,7 +2,7 @@ name: Snapshot
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -21,7 +21,32 @@ permissions:
   contents: write # zizmor: ignore[excessive-permissions]
 
 jobs:
+  # Determine whether this run should produce a snapshot.
+  # On main and workflow_dispatch: always run.
+  # On other branches: only run when [snapshot] appears in the commit message.
+  detect-flags:
+    runs-on: ubuntu-latest
+    outputs:
+      run_snapshot: ${{ steps.parse.outputs.run_snapshot }}
+    steps:
+      - name: Parse commit message flags
+        id: parse
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$EVENT" == "workflow_dispatch" || "$REF" == "refs/heads/main" ]]; then
+            echo "run_snapshot=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_snapshot=false
+          [[ "$COMMIT_MSG" == *"[snapshot]"* ]] && run_snapshot=true
+          echo "run_snapshot=$run_snapshot" >> "$GITHUB_OUTPUT"
+
   version:
+    needs: [detect-flags]
+    if: needs.detect-flags.outputs.run_snapshot == 'true'
     runs-on: ubuntu-latest
     outputs:
       date: ${{ steps.v.outputs.date }}
@@ -35,10 +60,13 @@ jobs:
           echo "chart_version=0.0.0-snapshot.${date_stamp}" >> "$GITHUB_OUTPUT"
 
   ci:
+    needs: [detect-flags]
+    if: needs.detect-flags.outputs.run_snapshot == 'true'
     uses: ./.github/workflows/_ci.yaml
 
   publish:
-    needs: [version, ci]
+    needs: [detect-flags, version, ci]
+    if: needs.detect-flags.outputs.run_snapshot == 'true'
     permissions:
       contents: write
       packages: write

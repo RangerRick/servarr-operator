@@ -17,6 +17,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Stage 0: Parse commit/PR flags (instant) ──────────────────────
+  detect-flags:
+    runs-on: ubuntu-latest
+    outputs:
+      full_build: ${{ steps.parse.outputs.full_build }}
+      run_smoke: ${{ steps.parse.outputs.run_smoke }}
+    steps:
+      - name: Parse commit message flags
+        id: parse
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == "pull_request" ]]; then
+            msg="$PR_TITLE"
+          else
+            msg="$COMMIT_MSG"
+          fi
+          full_build=false
+          run_smoke=false
+          [[ "$msg" == *"[full-build]"* ]] && full_build=true
+          [[ "$msg" == *"[smoke]"* ]] && run_smoke=true
+          echo "full_build=$full_build" >> "$GITHUB_OUTPUT"
+          echo "run_smoke=$run_smoke" >> "$GITHUB_OUTPUT"
+
   # ── Stage 1: Fast lint (seconds) ─────────────────────────────────
   fmt:
     runs-on: ubuntu-latest
@@ -169,17 +195,10 @@ jobs:
 
   # Build: compile on runner (cached), package into minimal Docker image.
   # Runs in parallel with clippy/test to eliminate serial wait.
+  #
+  # amd64 always runs — it feeds the crd-drift and smoke-test artifact chain.
   build:
     needs: [fmt, actionlint, zizmor]
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            arch: amd64
-            upload-artifacts: true
-          - target: aarch64-unknown-linux-musl
-            arch: arm64
-            upload-artifacts: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -191,42 +210,26 @@ jobs:
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
         with:
           cache-on-failure: true
-          key: musl-${{ matrix.arch }}
+          key: musl-amd64
 
       - name: Install musl toolchain
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-          rustup target add ${{ matrix.target }}
-
-      - name: Install cross (arm64 only)
-        if: matrix.arch == 'arm64'
-        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
-        with:
-          tool: cross
+          rustup target add x86_64-unknown-linux-musl
 
       - name: Build static release binary
-        run: |
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            # gcc-aarch64-linux-gnu targets glibc; on Ubuntu 24.04 it emits
-            # __isoc23_sscanf and __*_chk symbols that musl does not provide.
-            # cross uses a Docker image with a proper musl cross-toolchain.
-            cross build --release --target ${{ matrix.target }} --bin servarr-operator
-          else
-            cargo build --release --target ${{ matrix.target }} --bin servarr-operator
-          fi
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin servarr-operator
 
       - name: Upload binary artifact
-        if: matrix.upload-artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-binary
-          path: target/${{ matrix.target }}/release/servarr-operator
+          path: target/x86_64-unknown-linux-musl/release/servarr-operator
           retention-days: 1
 
       - name: Package Docker image
-        if: matrix.upload-artifacts
         run: |
-          cp target/${{ matrix.target }}/release/servarr-operator /tmp/servarr-operator
+          cp target/x86_64-unknown-linux-musl/release/servarr-operator /tmp/servarr-operator
           docker build -t servarr-operator:ci -f- /tmp <<'DOCKERFILE'
           FROM gcr.io/distroless/static-debian12:nonroot
           COPY servarr-operator /servarr-operator
@@ -235,20 +238,62 @@ jobs:
           DOCKERFILE
 
       - name: Save Docker image as artifact
-        if: matrix.upload-artifacts
         run: docker save servarr-operator:ci | gzip > /tmp/servarr-operator-ci.tar.gz
 
       - name: Upload Docker image artifact
-        if: matrix.upload-artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: operator-image
           path: /tmp/servarr-operator-ci.tar.gz
           retention-days: 1
 
+  # arm64 only runs on main, workflow_dispatch, or when [full-build] appears
+  # in the commit message / PR title.
+  build-arm64:
+    needs: [fmt, actionlint, zizmor, detect-flags]
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.detect-flags.outputs.full_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          cache-on-failure: true
+          key: musl-arm64
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+          rustup target add aarch64-unknown-linux-musl
+
+      - name: Install cross
+        uses: taiki-e/install-action@1cf3de8de323df92fe08c793e53eaef58799aec4 # v2.68.3
+        with:
+          tool: cross
+
+      - name: Build static release binary
+        run: |
+          # gcc-aarch64-linux-gnu targets glibc; on Ubuntu 24.04 it emits
+          # __isoc23_sscanf and __*_chk symbols that musl does not provide.
+          # cross uses a Docker image with a proper musl cross-toolchain.
+          cross build --release --target aarch64-unknown-linux-musl --bin servarr-operator
+
   # ── Stage 3: Integration smoke test ─────────────────────────────
+  # Runs automatically on main and workflow_dispatch.
+  # On branches: include [smoke] in the commit message or PR title to opt in.
   smoke-test:
-    needs: [build, clippy, test, helm-lint, crd-drift]
+    needs: [build, clippy, test, helm-lint, crd-drift, detect-flags]
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.detect-flags.outputs.run_smoke == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
