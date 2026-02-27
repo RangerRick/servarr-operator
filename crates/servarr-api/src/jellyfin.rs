@@ -52,6 +52,36 @@ struct StartupUserRequest<'a> {
     password: &'a str,
 }
 
+/// Jellyfin startup configuration request body.
+///
+/// Sent to `POST /Startup/Configuration` to advance the wizard past step 1.
+/// All fields have sensible defaults; we just need to hit the endpoint.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct StartupConfigRequest {
+    ui_culture: String,
+    metadata_country_code: String,
+    preferred_metadata_language: String,
+}
+
+impl Default for StartupConfigRequest {
+    fn default() -> Self {
+        Self {
+            ui_culture: "en-US".into(),
+            metadata_country_code: "US".into(),
+            preferred_metadata_language: "en".into(),
+        }
+    }
+}
+
+/// Jellyfin startup remote access request body.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct StartupRemoteAccessRequest {
+    enable_remote_access: bool,
+    enable_automatic_port_mapping: bool,
+}
+
 /// Authorization header value required by the Jellyfin startup wizard endpoints.
 const JELLYFIN_AUTH_HEADER: &str = concat!(
     r#"MediaBrowser Client="servarr-operator", "#,
@@ -83,6 +113,30 @@ impl JellyfinClient {
         Ok(resp.status().as_u16() == 200)
     }
 
+    /// Advance the startup wizard past step 1 (`POST /Startup/Configuration`).
+    ///
+    /// Must be called before `startup_set_user`; without this, Jellyfin ≥ 10.9
+    /// returns 500 on `POST /Startup/User`.
+    async fn startup_configure(&self) -> Result<(), ApiError> {
+        let url = self.http.base_url().join("/Startup/Configuration")?;
+        let resp = self
+            .http
+            .inner()
+            .post(url)
+            .header("X-Emby-Authorization", JELLYFIN_AUTH_HEADER)
+            .json(&StartupConfigRequest::default())
+            .send()
+            .await
+            .map_err(ApiError::Request)?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::ApiResponse { status, body })
+        }
+    }
+
     /// Set the initial admin user via the startup wizard (`POST /Startup/User`).
     pub async fn startup_set_user(&self, username: &str, password: &str) -> Result<(), ApiError> {
         let url = self.http.base_url().join("/Startup/User")?;
@@ -96,6 +150,53 @@ impl JellyfinClient {
             .post(url)
             .header("X-Emby-Authorization", JELLYFIN_AUTH_HEADER)
             .json(&body)
+            .send()
+            .await
+            .map_err(ApiError::Request)?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::ApiResponse { status, body })
+        }
+    }
+
+    /// Configure remote access as part of the startup wizard (`POST /Startup/RemoteAccess`).
+    async fn startup_set_remote_access(&self) -> Result<(), ApiError> {
+        let url = self.http.base_url().join("/Startup/RemoteAccess")?;
+        let body = StartupRemoteAccessRequest {
+            enable_remote_access: true,
+            enable_automatic_port_mapping: false,
+        };
+        let resp = self
+            .http
+            .inner()
+            .post(url)
+            .header("X-Emby-Authorization", JELLYFIN_AUTH_HEADER)
+            .json(&body)
+            .send()
+            .await
+            .map_err(ApiError::Request)?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::ApiResponse { status, body })
+        }
+    }
+
+    /// Complete the startup wizard (`POST /Startup/Complete`).
+    ///
+    /// Without this call the admin user cannot authenticate via the regular API.
+    async fn startup_complete(&self) -> Result<(), ApiError> {
+        let url = self.http.base_url().join("/Startup/Complete")?;
+        let resp = self
+            .http
+            .inner()
+            .post(url)
+            .header("X-Emby-Authorization", JELLYFIN_AUTH_HEADER)
             .send()
             .await
             .map_err(ApiError::Request)?;
@@ -202,7 +303,12 @@ impl JellyfinClient {
     /// Otherwise, authenticates as the existing admin and changes the password.
     pub async fn configure_admin(&self, username: &str, password: &str) -> Result<(), ApiError> {
         if self.startup_pending().await? {
-            return self.startup_set_user(username, password).await;
+            // Run the full startup wizard flow. Jellyfin ≥ 10.9 requires each
+            // step in order; skipping any step causes subsequent ones to 500.
+            self.startup_configure().await?;
+            self.startup_set_user(username, password).await?;
+            self.startup_set_remote_access().await?;
+            return self.startup_complete().await;
         }
 
         // Wizard complete: authenticate as the admin user and update the password.
@@ -399,9 +505,30 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
+        // startup_configure (POST /Startup/Configuration)
+        Mock::given(method("POST"))
+            .and(path("/Startup/Configuration"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
         // startup_set_user
         Mock::given(method("POST"))
             .and(path("/Startup/User"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // startup_set_remote_access
+        Mock::given(method("POST"))
+            .and(path("/Startup/RemoteAccess"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // startup_complete
+        Mock::given(method("POST"))
+            .and(path("/Startup/Complete"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&server)

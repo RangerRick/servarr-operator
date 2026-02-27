@@ -207,36 +207,62 @@ else
   cred_fail=$((cred_fail + 1))
 fi
 
-# --- Transmission: session-set enables RPC auth → no-auth request returns 401,
-#     correct credentials → 409 (session ID handshake, not 401).
+# --- Transmission: session-set enables RPC auth.
+#
+# Transmission's protocol requires a session ID handshake *before* checking
+# credentials, so requests without a session ID always return 409 regardless
+# of auth state.  The correct verification sequence is:
+#   1. Make a bare request → 409, extract X-Transmission-Session-Id from headers
+#   2. Repeat with session ID but no credentials → 401 (auth enforced)
+#   3. Repeat with session ID + correct credentials → 200 (success)
+#
 # Retry up to 60s because the operator's credential sync runs asynchronously. ---
 check_transmission_auth() {
   local lport=$1
 
   local deadline=$(( $(date +%s) + 60 ))
   while true; do
-    # Without auth: expect 401
+    # Step 1: get the session ID
+    local session_id
+    session_id=$(curl -si --max-time 10 \
+      -X POST "http://localhost:${lport}/transmission/rpc" \
+      -H 'Content-Type: application/json' \
+      -d '{"method":"session-get"}' 2>/dev/null \
+      | grep -i "X-Transmission-Session-Id:" | awk '{print $2}' | tr -d '\r')
+
+    if [[ -z "$session_id" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-transmission: FAIL (could not obtain session ID)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 2: with session ID but no credentials → 401 when auth is enabled
     local status_no_auth
     status_no_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
+      -H "X-Transmission-Session-Id: ${session_id}" \
       -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-    # With correct credentials: expect 409 (session ID needed) — not 401
+    # Step 3: with session ID + correct credentials → 200
     local status_with_auth
     status_with_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
+      -H "X-Transmission-Session-Id: ${session_id}" \
       -u "${ADMIN_USER}:${ADMIN_PASS}" \
       -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-    if [[ "$status_no_auth" == "401" && "$status_with_auth" == "409" ]]; then
-      echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=409)"
+    if [[ "$status_no_auth" == "401" && "$status_with_auth" == "200" ]]; then
+      echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=200)"
       return 0
     fi
 
     if [[ $(date +%s) -ge $deadline ]]; then
-      echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=409," \
+      echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=200," \
            "got no-auth=${status_no_auth} and correct-creds=${status_with_auth})"
       return 1
     fi

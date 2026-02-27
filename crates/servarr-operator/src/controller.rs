@@ -790,12 +790,15 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
             "Admin credentials applied successfully",
             &now,
         ),
-        Err(msg) => Condition::fail(
-            condition_types::ADMIN_CREDENTIALS_CONFIGURED,
-            "SyncFailed",
-            &msg,
-            &now,
-        ),
+        Err(ref msg) => {
+            warn!(app = %app.name_any(), error = %msg, "admin-credentials: sync failed");
+            Condition::fail(
+                condition_types::ADMIN_CREDENTIALS_CONFIGURED,
+                "SyncFailed",
+                msg,
+                &now,
+            )
+        }
     })
 }
 
