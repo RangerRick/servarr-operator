@@ -105,7 +105,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).set_credentials("admin", "s3cr3t").await.unwrap();
+        client(&server)
+            .set_credentials("admin", "s3cr3t")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -116,7 +119,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
             .mount(&server)
             .await;
-        let err = client(&server).set_credentials("admin", "bad").await.unwrap_err();
+        let err = client(&server)
+            .set_credentials("admin", "bad")
+            .await
+            .unwrap_err();
         match err {
             ApiError::ApiResponse { status, .. } => assert_eq!(status, 403),
             other => panic!("unexpected error: {other}"),
@@ -130,9 +136,8 @@ mod tests {
             .and(path("/api/v2"))
             .and(query_param("cmd", "status"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({"response": {"result": "success"}}),
-                ),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"response": {"result": "success"}})),
             )
             .mount(&server)
             .await;
@@ -145,9 +150,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v2"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({"response": {"result": "error"}}),
-                ),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"response": {"result": "error"}})),
             )
             .mount(&server)
             .await;

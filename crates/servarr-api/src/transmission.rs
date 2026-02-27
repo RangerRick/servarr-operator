@@ -273,8 +273,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
             .respond_with(
-                ResponseTemplate::new(409)
-                    .append_header("X-Transmission-Session-Id", "sess-abc"),
+                ResponseTemplate::new(409).append_header("X-Transmission-Session-Id", "sess-abc"),
             )
             .up_to_n_times(1)
             .mount(&server)
@@ -282,9 +281,7 @@ mod tests {
         // Retry succeeds
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({}))),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({}))))
             .mount(&server)
             .await;
 
@@ -297,13 +294,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/transmission/rpc"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({
-                "version": "3.00 (bb6b5a062e)",
-                "rpc-version": 17,
-                "rpc-version-minimum": 14,
-                "download-dir": "/downloads",
-                "config-dir": "/config",
-            }))))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(rpc_ok(serde_json::json!({
+                    "version": "3.00 (bb6b5a062e)",
+                    "rpc-version": 17,
+                    "rpc-version-minimum": 14,
+                    "download-dir": "/downloads",
+                    "config-dir": "/config",
+                }))),
+            )
             .mount(&server)
             .await;
 

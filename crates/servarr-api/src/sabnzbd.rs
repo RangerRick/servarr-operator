@@ -157,7 +157,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).set_config("misc", "username", "admin").await.unwrap();
+        client(&server)
+            .set_config("misc", "username", "admin")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -168,7 +171,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(500).set_body_string("error"))
             .mount(&server)
             .await;
-        let err = client(&server).set_config("misc", "username", "x").await.unwrap_err();
+        let err = client(&server)
+            .set_config("misc", "username", "x")
+            .await
+            .unwrap_err();
         match err {
             ApiError::ApiResponse { status, .. } => assert_eq!(status, 500),
             other => panic!("unexpected error: {other}"),
@@ -192,7 +198,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).set_credentials("admin", "s3cr3t").await.unwrap();
+        client(&server)
+            .set_credentials("admin", "s3cr3t")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -202,8 +211,7 @@ mod tests {
             .and(path("/api"))
             .and(query_param("mode", "version"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"version": "4.3.2"})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"version": "4.3.2"})),
             )
             .mount(&server)
             .await;
@@ -218,8 +226,7 @@ mod tests {
             .and(path("/api"))
             .and(query_param("mode", "version"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"version": "4.0.0"})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"version": "4.0.0"})),
             )
             .mount(&server)
             .await;

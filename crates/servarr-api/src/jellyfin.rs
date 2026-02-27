@@ -298,7 +298,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).startup_set_user("admin", "pass").await.unwrap();
+        client(&server)
+            .startup_set_user("admin", "pass")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -309,7 +312,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
             .mount(&server)
             .await;
-        let err = client(&server).startup_set_user("admin", "pass").await.unwrap_err();
+        let err = client(&server)
+            .startup_set_user("admin", "pass")
+            .await
+            .unwrap_err();
         match err {
             ApiError::ApiResponse { status, .. } => assert_eq!(status, 400),
             other => panic!("unexpected: {other}"),
@@ -340,7 +346,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
             .mount(&server)
             .await;
-        let err = client(&server).authenticate("admin", "wrong").await.unwrap_err();
+        let err = client(&server)
+            .authenticate("admin", "wrong")
+            .await
+            .unwrap_err();
         match err {
             ApiError::ApiResponse { status, .. } => assert_eq!(status, 401),
             other => panic!("unexpected: {other}"),
@@ -353,12 +362,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/Users"))
             .and(header_exists("X-Emby-Authorization"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    {"Id": "user-1", "Name": "Admin"},
-                    {"Id": "user-2", "Name": "Guest"},
-                ])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"Id": "user-1", "Name": "Admin"},
+                {"Id": "user-2", "Name": "Guest"},
+            ])))
             .mount(&server)
             .await;
         let users = client(&server).list_users("my-token").await.unwrap();
@@ -377,7 +384,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).set_password("tok", "user-1", "newpass").await.unwrap();
+        client(&server)
+            .set_password("tok", "user-1", "newpass")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -396,7 +406,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).configure_admin("admin", "pass").await.unwrap();
+        client(&server)
+            .configure_admin("admin", "pass")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -421,9 +434,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/Users"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!([{"Id": "u1", "Name": "admin"}]),
-                ),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{"Id": "u1", "Name": "admin"}])),
             )
             .mount(&server)
             .await;
@@ -434,7 +446,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        client(&server).configure_admin("admin", "newpass").await.unwrap();
+        client(&server)
+            .configure_admin("admin", "newpass")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -448,8 +463,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/Users/AuthenticateByName"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"AccessToken": "tok"})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"AccessToken": "tok"})),
             )
             .mount(&server)
             .await;
@@ -457,13 +471,15 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/Users"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!([{"Id": "u99", "Name": "someone_else"}]),
-                ),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{"Id": "u99", "Name": "someone_else"}])),
             )
             .mount(&server)
             .await;
-        let err = client(&server).configure_admin("admin", "pass").await.unwrap_err();
+        let err = client(&server)
+            .configure_admin("admin", "pass")
+            .await
+            .unwrap_err();
         match err {
             ApiError::ApiResponse { status: 404, .. } => {}
             other => panic!("expected 404, got: {other}"),
