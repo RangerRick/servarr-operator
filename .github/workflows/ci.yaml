@@ -307,8 +307,26 @@ jobs:
           name: operator-image
           path: /tmp
 
-      - name: Load Docker image
+      - name: Load operator image into Docker
         run: gunzip -c /tmp/servarr-operator-ci.tar.gz | docker load
+
+      # Start the local registry before the kind cluster so that when pods
+      # start they can pull images from kind-registry:5000 (internal) which
+      # is backed by localhost:5000 (host) where we push all images.
+      - name: Start local registry
+        run: docker run -d --name kind-registry --restart=always -p 127.0.0.1:5000:5000 registry:2
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: kind
+          wait: 120s
+
+      # Connect the registry container to the kind Docker network so that
+      # kind nodes can resolve "kind-registry:5000" without any containerd
+      # mirror config.
+      - name: Connect registry to kind network
+        run: docker network connect kind kind-registry
 
       # Cache each app image as a separate file so that bumping one tag
       # only re-pulls that single image instead of invalidating ~3GB.
@@ -325,10 +343,15 @@ jobs:
           key: ${{ steps.image-cache-key.outputs.key }}
           restore-keys: app-images-
 
-      - name: Pull missing app images
+      # Pull any images not in the cache, then push all images to the local
+      # registry. Images are tagged without their upstream registry hostname
+      # so containerd can pull them as kind-registry:5000/<repo>:<tag>.
+      # The operator's defaultImages values are overridden to use the local
+      # registry so no containerd mirror config is needed.
+      - name: Pull and push app images to local registry
         run: |
           mkdir -p /tmp/app-images
-          # Parse image-defaults.toml into name repo:tag lines
+
           images=$(awk -F' *= *' '
             /^\[/ { name=substr($0,2,length($0)-2) }
             $1=="repository" { gsub(/"/, "", $2); repo=$2 }
@@ -337,39 +360,45 @@ jobs:
               repo=""; tag="" }
           ' image-defaults.toml)
 
+          # Build a Helm values override file for defaultImages
+          echo "defaultImages:" > /tmp/image-overrides.yaml
+
           pulled=0
           while read -r name image; do
             safe_name="${name//\//_}"
             file="/tmp/app-images/${safe_name}.tar.gz"
-            # Check if cached file matches the current image ref
             marker="/tmp/app-images/${safe_name}.ref"
+
             if [[ -f "$file" && -f "$marker" && "$(cat "$marker")" == "$image" ]]; then
-              echo "  ${name}: cached (${image})"
-              continue
+              echo "  ${name}: loading from cache (${image})"
+              docker load < <(gunzip -c "$file")
+            else
+              echo "  ${name}: pulling ${image}"
+              docker pull --platform linux/amd64 "$image"
+              docker save "$image" | gzip > "$file"
+              echo "$image" > "$marker"
+              pulled=$((pulled + 1))
             fi
-            echo "  ${name}: pulling ${image}"
-            docker pull --platform linux/amd64 "$image"
-            docker save "$image" | gzip > "$file"
-            echo "$image" > "$marker"
-            pulled=$((pulled + 1))
+
+            # Strip registry hostname prefix (ghcr.io/, quay.io/) so the
+            # local registry path matches the image name pods use.
+            local_path="${image%:*}"
+            local_path="${local_path#ghcr.io/}"
+            local_path="${local_path#quay.io/}"
+            tag="${image##*:}"
+            docker tag "$image" "localhost:5000/${local_path}:${tag}"
+            docker push "localhost:5000/${local_path}:${tag}"
+
+            printf "  %s:\n    repository: kind-registry:5000/%s\n" \
+              "$name" "$local_path" >> /tmp/image-overrides.yaml
           done <<< "$images"
-          echo "Pulled ${pulled} image(s), $(echo "$images" | wc -l | tr -d ' ') total"
 
-      - name: Create kind cluster
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
-        with:
-          cluster_name: kind
-          wait: 120s
+          echo "Pulled ${pulled} new image(s), $(echo "$images" | wc -l | tr -d ' ') total"
 
-      # Import directly into containerd, skipping kind's --all-platforms
-      # flag which fails on multi-platform image manifests.
-      - name: Load images into kind
+      - name: Push operator image to local registry
         run: |
-          ctr_import="docker exec -i kind-control-plane ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -"
-          docker save servarr-operator:ci | $ctr_import
-          for img in /tmp/app-images/*.tar.gz; do
-            gunzip -c "$img" | $ctr_import
-          done
+          docker tag servarr-operator:ci localhost:5000/servarr-operator:ci
+          docker push localhost:5000/servarr-operator:ci
 
       - name: Install CRDs
         run: |
@@ -381,9 +410,10 @@ jobs:
         run: |
           helm dependency build charts/servarr-operator/
           helm template smoke charts/servarr-operator/ \
-            --set image.repository=servarr-operator \
+            -f /tmp/image-overrides.yaml \
+            --set image.repository=kind-registry:5000/servarr-operator \
             --set image.tag=ci \
-            --set image.pullPolicy=Never \
+            --set image.pullPolicy=IfNotPresent \
             --set webhook.enabled=false \
             --set watchAllNamespaces=true \
             | kubectl apply -f -
@@ -429,8 +459,14 @@ jobs:
           kubectl get servarrapps -o yaml || true
           echo ""
           echo "=== Transmission diagnostics ==="
-          echo "--- media-transmission env vars ---"
-          kubectl exec deployment/media-transmission -- env 2>/dev/null | grep -E "^USER=|^PASS=" || echo "(exec failed or no USER/PASS)"
+          echo "--- media-transmission process env ---"
+          kubectl exec deployment/media-transmission -- env 2>/dev/null \
+            | grep -E "^(USER|PASS|FILE__USER|FILE__PASS)=" || echo "(exec failed or no USER/PASS)"
+          echo "--- media-transmission s6 container env ---"
+          kubectl exec deployment/media-transmission -- cat /run/s6/container_environment/USER 2>/dev/null \
+            && echo "" || echo "(USER not in s6 env)"
+          kubectl exec deployment/media-transmission -- cat /run/s6/container_environment/PASS 2>/dev/null \
+            && echo "" || echo "(PASS not in s6 env)"
           echo "--- media-transmission settings.json auth fields ---"
           kubectl exec deployment/media-transmission -- cat /config/settings.json 2>/dev/null \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('rpc-authentication-required:', d.get('rpc-authentication-required')); print('rpc-username:', d.get('rpc-username'))" \

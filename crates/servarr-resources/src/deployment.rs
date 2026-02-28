@@ -367,6 +367,15 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
             mount_path: "/watch".into(),
             ..Default::default()
         });
+        // Admin credentials secret mounted for FILE__USER / FILE__PASS
+        if app.spec.admin_credentials.is_some() {
+            mounts.push(VolumeMount {
+                name: "admin-credentials".into(),
+                mount_path: "/run/secrets/admin".into(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
     }
 
     // Prowlarr custom indexer definitions
@@ -476,6 +485,18 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
             empty_dir: Some(Default::default()),
             ..Default::default()
         });
+        // Admin credentials secret volume for FILE__USER / FILE__PASS mechanism
+        if let Some(ref ac) = app.spec.admin_credentials {
+            use k8s_openapi::api::core::v1::SecretVolumeSource;
+            volumes.push(Volume {
+                name: "admin-credentials".into(),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(ac.secret_name.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
     }
 
     // SABnzbd tar-unpack scripts ConfigMap
@@ -785,11 +806,33 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
                 ..Default::default()
             });
         }
-        // Transmission: inject USER/PASS for exec liveness/readiness probes
-        // (curl -sf -u "$USER:$PASS"). The LSIO init script also reads these
-        // to configure settings.json, but the s6-overlay USER env var conflict
-        // makes that unreliable — credentials are applied via RPC instead.
+        // Transmission: enable RPC authentication via the LSIO FILE__ mechanism.
+        //
+        // LSIO's init-transmission-config runs with `with-contenv bash`, reading
+        // from /run/s6/container_environment/. Kubernetes secretKeyRef env vars
+        // reach the container process env but do NOT reliably appear in the s6
+        // container env store because the built-in USER variable is overwritten
+        // by the login system during s6 init.
+        //
+        // FILE__USER / FILE__PASS tell LSIO's init-envfile script to read the
+        // secret files and write their contents into /run/s6/container_environment/
+        // as USER and PASS, overriding whatever was there. init-transmission-config
+        // (which runs after init-envfile) then sees the correct credentials and
+        // sets rpc-authentication-required = true in settings.json.
+        //
+        // The USER/PASS secretKeyRef vars are kept for exec probe compatibility
+        // (curl -sf -u "$USER:$PASS"). The volume is added in build_volumes.
         if matches!(app.spec.app, AppType::Transmission) {
+            env.push(EnvVar {
+                name: "FILE__USER".into(),
+                value: Some("/run/secrets/admin/username".into()),
+                ..Default::default()
+            });
+            env.push(EnvVar {
+                name: "FILE__PASS".into(),
+                value: Some("/run/secrets/admin/password".into()),
+                ..Default::default()
+            });
             env.push(EnvVar {
                 name: "USER".into(),
                 value_from: Some(EnvVarSource {

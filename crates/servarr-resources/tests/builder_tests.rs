@@ -3386,7 +3386,21 @@ fn test_admin_credentials_transmission_env_vars() {
     assert!(find_env(&env, "TRANSMISSION__AUTH__PASSWORD").is_none());
     assert!(find_env(&env, "TRANSMISSION__AUTH__METHOD").is_none());
 
-    // USER/PASS must be set from the secret for LSIO compatibility + exec probe
+    // FILE__USER / FILE__PASS: LSIO FILE__ mechanism for s6 container env
+    let file_user = find_env(&env, "FILE__USER").expect("FILE__USER must be set for Transmission");
+    let file_pass = find_env(&env, "FILE__PASS").expect("FILE__PASS must be set for Transmission");
+    assert_eq!(
+        file_user.value.as_deref(),
+        Some("/run/secrets/admin/username"),
+        "FILE__USER must point to the mounted secret file"
+    );
+    assert_eq!(
+        file_pass.value.as_deref(),
+        Some("/run/secrets/admin/password"),
+        "FILE__PASS must point to the mounted secret file"
+    );
+
+    // USER/PASS secretKeyRef kept for exec probe (curl -u "$USER:$PASS")
     let user = find_env(&env, "USER").expect("USER env var should be set for Transmission");
     let pass = find_env(&env, "PASS").expect("PASS env var should be set for Transmission");
     assert_eq!(
@@ -3405,6 +3419,40 @@ fn test_admin_credentials_transmission_env_vars() {
         Some("password"),
         "PASS should be sourced from adminCredentials secret key 'password'"
     );
+}
+
+#[test]
+fn test_admin_credentials_transmission_mounts_secret_volume() {
+    let mut app = make_app(AppType::Transmission);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "creds".into(),
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+
+    // Volume must exist
+    let vol = pod_spec
+        .volumes
+        .as_ref()
+        .and_then(|vs| vs.iter().find(|v| v.name == "admin-credentials"))
+        .expect("admin-credentials volume must be present");
+    assert_eq!(
+        vol.secret.as_ref().and_then(|s| s.secret_name.as_deref()),
+        Some("creds"),
+        "admin-credentials volume must reference the adminCredentials secret"
+    );
+
+    // Volume mount must exist in the container
+    let mounts = pod_spec.containers[0]
+        .volume_mounts
+        .as_ref()
+        .expect("container must have volume mounts");
+    let mount = mounts
+        .iter()
+        .find(|m| m.name == "admin-credentials")
+        .expect("admin-credentials mount must be present");
+    assert_eq!(mount.mount_path, "/run/secrets/admin");
+    assert_eq!(mount.read_only, Some(true));
 }
 
 #[test]

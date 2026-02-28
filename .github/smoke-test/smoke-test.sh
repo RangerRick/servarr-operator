@@ -18,9 +18,9 @@ declare -A APP_PORTS=(
 )
 
 APPS=("${!APP_PORTS[@]}")
-TIMEOUT=240
+TIMEOUT=360
 POLL_INTERVAL=10
-MIN_READY=$(( ${#APPS[@]} - 2 ))  # Tolerate up to 2 slow starters on resource-constrained CI
+MIN_READY=${#APPS[@]}
 
 echo "Phase 1: Waiting for deployments to become ready (timeout: ${TIMEOUT}s, min: ${MIN_READY}/${#APPS[@]})"
 
@@ -46,16 +46,11 @@ while true; do
   fi
 
   if [[ $elapsed -ge $TIMEOUT ]]; then
-    if [[ $ready_count -ge $MIN_READY ]]; then
-      echo "WARNING: ${ready_count}/${#APPS[@]} deployments ready after ${TIMEOUT}s (minimum ${MIN_READY} met)"
-      echo "  Not ready: ${not_ready_apps[*]}"
-      break
-    else
-      echo "ERROR: Only ${ready_count}/${#APPS[@]} deployments ready after ${TIMEOUT}s (need ${MIN_READY})"
-      echo "Deployment status:"
-      kubectl get deployments -o wide
-      exit 1
-    fi
+    echo "ERROR: Only ${ready_count}/${#APPS[@]} deployments ready after ${TIMEOUT}s"
+    echo "  Not ready: ${not_ready_apps[*]}"
+    echo "Deployment status:"
+    kubectl get deployments -o wide
+    exit 1
   fi
 
   echo "  ${ready_count}/${#APPS[@]} ready (${elapsed}s/${TIMEOUT}s)"
