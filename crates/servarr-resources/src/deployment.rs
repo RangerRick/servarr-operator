@@ -1250,11 +1250,12 @@ apk add --no-cache rsync >/dev/null 2>&1 || true
 fn maybe_override_probes_for_auth(app: &ServarrApp, probes: &ProbeSpec) -> ProbeSpec {
     // Only override if user hasn't explicitly set exec probes already
     if matches!(app.spec.app, AppType::Transmission)
-        && app
+        && (app
             .spec
             .app_config
             .as_ref()
             .is_some_and(|c| matches!(c, AppConfig::Transmission(tc) if tc.auth.is_some()))
+            || app.spec.admin_credentials.is_some())
         && !matches!(probes.liveness.probe_type, ProbeType::Exec)
     {
         let exec_cmd = vec![

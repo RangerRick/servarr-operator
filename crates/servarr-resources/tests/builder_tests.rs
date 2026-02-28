@@ -3374,17 +3374,72 @@ fn test_admin_credentials_prowlarr_injects_env_vars() {
 }
 
 #[test]
-fn test_admin_credentials_non_servarr_no_env_vars() {
+fn test_admin_credentials_transmission_env_vars() {
     let mut app = make_app(AppType::Transmission);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "creds".into(),
     });
     let env = get_env(&app);
 
-    // Transmission credentials are handled via API, not env vars
+    // Sonarr-style env vars must NOT be set for Transmission
     assert!(find_env(&env, "TRANSMISSION__AUTH__USERNAME").is_none());
     assert!(find_env(&env, "TRANSMISSION__AUTH__PASSWORD").is_none());
     assert!(find_env(&env, "TRANSMISSION__AUTH__METHOD").is_none());
+
+    // USER/PASS must be set from the secret for LSIO compatibility + exec probe
+    let user = find_env(&env, "USER").expect("USER env var should be set for Transmission");
+    let pass = find_env(&env, "PASS").expect("PASS env var should be set for Transmission");
+    assert_eq!(
+        user.value_from
+            .as_ref()
+            .and_then(|v| v.secret_key_ref.as_ref())
+            .map(|s| s.key.as_str()),
+        Some("username"),
+        "USER should be sourced from adminCredentials secret key 'username'"
+    );
+    assert_eq!(
+        pass.value_from
+            .as_ref()
+            .and_then(|v| v.secret_key_ref.as_ref())
+            .map(|s| s.key.as_str()),
+        Some("password"),
+        "PASS should be sourced from adminCredentials secret key 'password'"
+    );
+}
+
+#[test]
+fn test_admin_credentials_transmission_uses_exec_probe() {
+    use k8s_openapi::api::core::v1::ExecAction;
+
+    let mut app = make_app(AppType::Transmission);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "creds".into(),
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let container = &deploy.spec.unwrap().template.spec.unwrap().containers[0];
+
+    let liveness = container.liveness_probe.as_ref().expect("liveness probe must be set");
+    let readiness = container.readiness_probe.as_ref().expect("readiness probe must be set");
+
+    // Both probes must be exec (not httpGet) so they send credentials after auth is enabled
+    assert!(
+        liveness.http_get.is_none(),
+        "liveness probe must not be httpGet when adminCredentials is set"
+    );
+    assert!(
+        liveness.exec.is_some(),
+        "liveness probe must be exec when adminCredentials is set"
+    );
+    let exec_cmd = liveness.exec.as_ref().and_then(|e| e.command.as_ref());
+    assert!(
+        exec_cmd.is_some_and(|c| c.iter().any(|s| s.contains("USER") && s.contains("PASS"))),
+        "exec probe command must include $USER and $PASS"
+    );
+    assert!(
+        readiness.exec.is_some(),
+        "readiness probe must be exec when adminCredentials is set"
+    );
+    let _ = ExecAction::default(); // suppress unused import warning
 }
 
 #[test]

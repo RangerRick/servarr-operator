@@ -740,8 +740,33 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                 Err(e) => Err(e.to_string()),
             }
         }
-        // Transmission uses USER/PASS env vars (see deployment builder).
-        // No live API call needed; auth is set at pod startup.
+        AppType::Transmission => {
+            // Try to enable auth without credentials first (Transmission starts with auth
+            // disabled when LSIO's env var mechanism doesn't fire).  If we get 401,
+            // auth is already enabled (e.g., by LSIO or a previous reconcile) and our
+            // credentials should already be correct; confirm by fetching session info.
+            match servarr_api::TransmissionClient::new(&base_url, None, None) {
+                Ok(c_no_auth) => match c_no_auth.session_set_auth(&username, &password).await {
+                    Ok(()) => Ok(()),
+                    Err(servarr_api::ApiError::ApiResponse { status: 401, .. }) => {
+                        match servarr_api::TransmissionClient::new(
+                            &base_url,
+                            Some(&username),
+                            Some(&password),
+                        ) {
+                            Ok(c_auth) => c_auth
+                                .session_get()
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string()),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        }
         AppType::Jellyfin => match servarr_api::JellyfinClient::new(&base_url) {
             Ok(c) => c
                 .configure_admin(&username, &password)
