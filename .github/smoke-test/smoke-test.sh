@@ -206,40 +206,58 @@ fi
 
 # --- Transmission: session-set enables RPC auth.
 #
-# Transmission's protocol requires a session ID handshake *before* checking
-# credentials, so requests without a session ID always return 409 regardless
-# of auth state.  The correct verification sequence is:
-#   1. Make a bare request → 409, extract X-Transmission-Session-Id from headers
-#   2. Repeat with session ID but no credentials → 401 (auth enforced)
-#   3. Repeat with session ID + correct credentials → 200 (success)
+# Transmission 4.x with auth enabled checks credentials BEFORE the CSRF
+# session-ID.  The verification sequence is:
+#   1. Bare request (no creds, no session ID)  → 401 (auth enforced immediately)
+#   2. Request WITH credentials, no session ID → 409 + X-Transmission-Session-Id
+#   3. Request with session ID, no credentials → 401
+#   4. Request with session ID + credentials   → 200
 #
-# Retry up to 60s because the operator's credential sync runs asynchronously. ---
+# We verify both directions: unauthenticated returns 401, authenticated returns 200.
+# Retry up to 60s because auth is applied by a custom-cont-init.d script that
+# runs during container startup. ---
 check_transmission_auth() {
   local lport=$1
 
   local deadline=$(( $(date +%s) + 60 ))
   while true; do
-    # Step 1: get the session ID.
-    # Use grep -m 1 to match only the HTTP response header, not the HTML body
-    # which also contains the text "X-Transmission-Session-Id:" in its CSRF
-    # explanation paragraph.
-    local session_id
-    session_id=$(curl -si --max-time 10 \
+    # Step 1: verify unauthenticated request returns 401 (auth check is first in Tx 4.x).
+    local status_no_creds
+    status_no_creds=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
-      -d '{"method":"session-get"}' 2>/dev/null \
-      | grep -i -m 1 "X-Transmission-Session-Id:" | awk '{print $2}' | tr -d '\r')
+      -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-    if [[ -z "$session_id" ]]; then
+    if [[ "$status_no_creds" != "401" ]]; then
+      # Auth not yet enforced (or Transmission not yet ready)
       if [[ $(date +%s) -ge $deadline ]]; then
-        echo "  media-transmission: FAIL (could not obtain session ID)"
+        echo "  media-transmission: FAIL (expected bare request to return 401, got ${status_no_creds})"
         return 1
       fi
       sleep 10
       continue
     fi
 
-    # Step 2: with session ID but no credentials → 401 when auth is enabled
+    # Step 2: get the session ID using correct credentials.
+    # Transmission 4.x requires credentials before it will hand out a session ID.
+    local session_id
+    session_id=$(curl -si --max-time 10 \
+      -X POST "http://localhost:${lport}/transmission/rpc" \
+      -H 'Content-Type: application/json' \
+      -u "${ADMIN_USER}:${ADMIN_PASS}" \
+      -d '{"method":"session-get"}' 2>/dev/null \
+      | grep -i -m 1 "X-Transmission-Session-Id:" | awk '{print $2}' | tr -d '\r')
+
+    if [[ -z "$session_id" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-transmission: FAIL (could not obtain session ID with correct credentials)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 3: with session ID but no credentials → 401
     local status_no_auth
     status_no_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
@@ -247,7 +265,7 @@ check_transmission_auth() {
       -H "X-Transmission-Session-Id: ${session_id}" \
       -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
-    # Step 3: with session ID + correct credentials → 200
+    # Step 4: with session ID + correct credentials → 200
     local status_with_auth
     status_with_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
@@ -257,13 +275,13 @@ check_transmission_auth() {
       -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
     if [[ "$status_no_auth" == "401" && "$status_with_auth" == "200" ]]; then
-      echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=200)"
+      echo "  media-transmission: OK (auth enforced: bare=401, no-creds=401, correct-creds=200)"
       return 0
     fi
 
     if [[ $(date +%s) -ge $deadline ]]; then
-      echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=200," \
-           "got no-auth=${status_no_auth} and correct-creds=${status_with_auth})"
+      echo "  media-transmission: FAIL (expected no-creds=401 and correct-creds=200," \
+           "got no-creds=${status_no_auth} and correct-creds=${status_with_auth})"
       return 1
     fi
     sleep 10

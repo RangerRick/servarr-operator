@@ -392,3 +392,10 @@ jobs:
           kubectl exec deployment/media-transmission -- cat /config/settings.json 2>/dev/null \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print('rpc-authentication-required:', d.get('rpc-authentication-required')); print('rpc-username:', d.get('rpc-username'))" \
             2>/dev/null || echo "(exec or parse failed)"
+          echo "--- media-transmission RPC response (bare request, no creds) ---"
+          kubectl port-forward deployment/media-transmission 39091:9091 &>/dev/null &
+          sleep 3
+          curl -si --max-time 5 -X POST http://localhost:39091/transmission/rpc \
+            -H 'Content-Type: application/json' -d '{"method":"session-get"}' 2>/dev/null \
+            | head -5 || echo "(curl failed)"
+          kill %% 2>/dev/null || true
