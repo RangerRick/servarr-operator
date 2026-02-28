@@ -367,11 +367,22 @@ fn build_volume_mounts(persistence: &PersistenceSpec, app: &ServarrApp) -> Vec<V
             mount_path: "/watch".into(),
             ..Default::default()
         });
-        // Admin credentials secret mounted for FILE__USER / FILE__PASS
         if app.spec.admin_credentials.is_some() {
+            // Admin credentials secret mounted so apply-settings.sh (init container)
+            // and 99-transmission-auth.sh (custom-cont-init.d) can read them.
             mounts.push(VolumeMount {
                 name: "admin-credentials".into(),
                 mount_path: "/run/secrets/admin".into(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            // Mount the auth script into LSIO's custom-cont-init.d so it runs
+            // AFTER init-transmission-config (confirmed by s6-rc dependency chain:
+            // init-transmission-config → init-config-end → ... → init-custom-files).
+            mounts.push(VolumeMount {
+                name: "scripts".into(),
+                mount_path: "/custom-cont-init.d/99-transmission-auth.sh".into(),
+                sub_path: Some("99-transmission-auth.sh".into()),
                 read_only: Some(true),
                 ..Default::default()
             });
@@ -473,6 +484,11 @@ fn build_volumes(app: &ServarrApp, persistence: &PersistenceSpec) -> Vec<Volume>
                     k8s_openapi::api::core::v1::KeyToPath {
                         key: "settings-override.json".into(),
                         path: "settings-override.json".into(),
+                        mode: None,
+                    },
+                    k8s_openapi::api::core::v1::KeyToPath {
+                        key: "99-transmission-auth.sh".into(),
+                        path: "99-transmission-auth.sh".into(),
                         mode: None,
                     },
                 ]),
@@ -1077,24 +1093,33 @@ fn build_init_containers(
             run_as_group: Some(gid),
             ..security_context.clone()
         };
+        let mut apply_settings_mounts = vec![
+            VolumeMount {
+                name: "config".into(),
+                mount_path: "/config".into(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "scripts".into(),
+                mount_path: "/scripts".into(),
+                read_only: Some(true),
+                ..Default::default()
+            },
+        ];
+        if app.spec.admin_credentials.is_some() {
+            apply_settings_mounts.push(VolumeMount {
+                name: "admin-credentials".into(),
+                mount_path: "/run/secrets/admin".into(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
         init.push(Container {
             name: "apply-settings".into(),
             image: Some(image.to_string()),
             command: Some(vec!["/bin/sh".into(), "/scripts/apply-settings.sh".into()]),
             security_context: Some(init_sec),
-            volume_mounts: Some(vec![
-                VolumeMount {
-                    name: "config".into(),
-                    mount_path: "/config".into(),
-                    ..Default::default()
-                },
-                VolumeMount {
-                    name: "scripts".into(),
-                    mount_path: "/scripts".into(),
-                    read_only: Some(true),
-                    ..Default::default()
-                },
-            ]),
+            volume_mounts: Some(apply_settings_mounts),
             ..Default::default()
         });
     }

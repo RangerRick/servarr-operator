@@ -3456,6 +3456,52 @@ fn test_admin_credentials_transmission_mounts_secret_volume() {
 }
 
 #[test]
+fn test_admin_credentials_transmission_mounts_auth_script_to_custom_cont_init() {
+    let mut app = make_app(AppType::Transmission);
+    app.spec.admin_credentials = Some(AdminCredentialsSpec {
+        secret_name: "creds".into(),
+    });
+    let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
+    let pod_spec = deploy.spec.unwrap().template.spec.unwrap();
+
+    // The custom-cont-init.d script must be mounted in the main container via subPath.
+    // This guarantees the auth script runs AFTER init-transmission-config
+    // (confirmed by s6-rc dependency chain: init-transmission-config →
+    // init-config-end → init-mods → init-mods-package-install →
+    // init-mods-end → init-custom-files).
+    let mounts = pod_spec.containers[0]
+        .volume_mounts
+        .as_ref()
+        .expect("container must have volume mounts");
+    let auth_mount = mounts
+        .iter()
+        .find(|m| m.mount_path == "/custom-cont-init.d/99-transmission-auth.sh")
+        .expect("99-transmission-auth.sh must be mounted at /custom-cont-init.d/");
+    assert_eq!(auth_mount.name, "scripts");
+    assert_eq!(
+        auth_mount.sub_path.as_deref(),
+        Some("99-transmission-auth.sh")
+    );
+    assert_eq!(auth_mount.read_only, Some(true));
+
+    // The script key must also be present in the scripts volume items
+    let scripts_vol = pod_spec
+        .volumes
+        .as_ref()
+        .and_then(|vs| vs.iter().find(|v| v.name == "scripts"))
+        .expect("scripts volume must be present");
+    let items = scripts_vol
+        .config_map
+        .as_ref()
+        .and_then(|cm| cm.items.as_ref())
+        .expect("scripts volume must have items");
+    assert!(
+        items.iter().any(|i| i.key == "99-transmission-auth.sh"),
+        "scripts volume items must include 99-transmission-auth.sh"
+    );
+}
+
+#[test]
 fn test_admin_credentials_transmission_uses_exec_probe() {
     use k8s_openapi::api::core::v1::ExecAction;
 

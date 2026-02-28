@@ -365,14 +365,31 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   echo '{{}}' > "$SETTINGS_FILE"
 fi
 
-# Merge override settings into existing settings.
+# Build optional admin credentials overlay.
+# Mounted at /run/secrets/admin/ when adminCredentials is set on the ServarrApp.
+# Injecting here (init container) avoids the race between init-envfile and
+# init-transmission-config that occurs when using the FILE__ env var mechanism.
+AUTH_FILE=$(mktemp)
+echo '{{}}' > "$AUTH_FILE"
+if [ -f /run/secrets/admin/username ] && [ -f /run/secrets/admin/password ]; then
+  echo "Injecting admin credentials into settings..."
+  CRED_USER=$(cat /run/secrets/admin/username)
+  CRED_PASS=$(cat /run/secrets/admin/password)
+  jq -n \
+    --arg user "$CRED_USER" \
+    --arg pass "$CRED_PASS" \
+    '{{"rpc-authentication-required": true, "rpc-username": $user, "rpc-password": $pass}}' \
+    > "$AUTH_FILE"
+fi
+
+# Merge override settings and auth credentials into existing settings.
 # Write to /tmp first so we never touch a stale /config/*.tmp owned by a
 # different uid, then copy back to settings.json (owner-writable).
 echo "Applying settings overrides..."
 TMP=$(mktemp)
-jq -s '.[0] * .[1]' "$SETTINGS_FILE" "$OVERRIDE_FILE" > "$TMP"
+jq -s '.[0] * .[1] * .[2]' "$SETTINGS_FILE" "$OVERRIDE_FILE" "$AUTH_FILE" > "$TMP"
 cp "$TMP" "$SETTINGS_FILE"
-rm -f "$TMP"
+rm -f "$TMP" "$AUTH_FILE"
 
 # Fix ownership
 chown {uid}:{gid} "$SETTINGS_FILE"
@@ -382,9 +399,47 @@ echo "Settings applied successfully."
 "#
     );
 
+    // Custom cont-init.d script that runs AFTER init-transmission-config.
+    // Dependency chain: init-transmission-config → init-config-end → init-mods
+    //   → init-mods-package-install → init-mods-end → init-custom-files
+    // So this script is guaranteed to execute after init-transmission-config has
+    // already written rpc-authentication-required (which may be false if USER/PASS
+    // were not yet in the s6 container env due to the init-envfile race).
+    //
+    // This script re-applies auth settings from the mounted secret, winning the race.
+    let auth_script = r#"#!/bin/sh
+set -e
+SETTINGS_FILE="/config/settings.json"
+
+if [ ! -f /run/secrets/admin/username ] || [ ! -f /run/secrets/admin/password ]; then
+  echo "[transmission-auth] No admin credentials mounted, skipping"
+  exit 0
+fi
+
+if [ ! -f "$SETTINGS_FILE" ]; then
+  echo "[transmission-auth] settings.json not found, skipping"
+  exit 0
+fi
+
+CRED_USER=$(cat /run/secrets/admin/username)
+CRED_PASS=$(cat /run/secrets/admin/password)
+
+echo "[transmission-auth] Setting admin credentials..."
+TMP=$(mktemp)
+jq \
+  --arg user "$CRED_USER" \
+  --arg pass "$CRED_PASS" \
+  '.["rpc-authentication-required"] = true | .["rpc-username"] = $user | .["rpc-password"] = $pass' \
+  "$SETTINGS_FILE" > "$TMP"
+cp "$TMP" "$SETTINGS_FILE"
+rm -f "$TMP"
+echo "[transmission-auth] Admin credentials set successfully."
+"#;
+
     let mut data = BTreeMap::new();
     data.insert("settings-override.json".into(), settings_json);
     data.insert("apply-settings.sh".into(), apply_script);
+    data.insert("99-transmission-auth.sh".into(), auth_script.to_string());
 
     Some(ConfigMap {
         metadata: ObjectMeta {
