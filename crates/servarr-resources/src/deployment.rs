@@ -785,8 +785,10 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
                 ..Default::default()
             });
         }
-        // Transmission: LSIO container reads USER/PASS env vars to enable RPC
-        // auth at startup, avoiding the live-API race condition from session-set.
+        // Transmission: inject USER/PASS for exec liveness/readiness probes
+        // (curl -sf -u "$USER:$PASS"). The LSIO init script also reads these
+        // to configure settings.json, but the s6-overlay USER env var conflict
+        // makes that unreliable — credentials are applied via RPC instead.
         if matches!(app.spec.app, AppType::Transmission) {
             env.push(EnvVar {
                 name: "USER".into(),

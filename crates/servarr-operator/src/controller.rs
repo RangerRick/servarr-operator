@@ -365,20 +365,15 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // injected as secretKeyRef env vars at startup.  Patch a checksum annotation
     // so Kubernetes rolls the pods when the Secret rotates.
     //
-    // API-based apps (Jellyfin, Transmission, etc.) get credentials via
-    // sync_admin_credentials on every reconcile — they do NOT need a rolling
-    // restart and must NOT get the checksum annotation (it would cause an
-    // unnecessary restart that delays the startup wizard).
-    // Sonarr/Radarr/Lidarr/Prowlarr use ASP.NET Core env var overrides.
-    // Transmission uses LSIO's USER/PASS env vars.
-    // All of these require a pod restart when the secret rotates.
+    // API-based apps (Jellyfin, Transmission, Tautulli, Overseerr) receive
+    // credentials via sync_admin_credentials on every reconcile — they do NOT
+    // need a rolling restart.  Transmission in particular MUST NOT get a
+    // checksum annotation: the LSIO init script rewrites settings.json on every
+    // container start, so a rolling update would race and reset auth to false
+    // before the operator's next reconcile can re-apply it via RPC.
     let uses_env_var_creds = matches!(
         app.spec.app,
-        AppType::Sonarr
-            | AppType::Radarr
-            | AppType::Lidarr
-            | AppType::Prowlarr
-            | AppType::Transmission
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
     );
     if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
