@@ -3418,8 +3418,14 @@ fn test_admin_credentials_transmission_uses_exec_probe() {
     let deploy = servarr_resources::deployment::build(&app, &std::collections::HashMap::new());
     let container = &deploy.spec.unwrap().template.spec.unwrap().containers[0];
 
-    let liveness = container.liveness_probe.as_ref().expect("liveness probe must be set");
-    let readiness = container.readiness_probe.as_ref().expect("readiness probe must be set");
+    let liveness = container
+        .liveness_probe
+        .as_ref()
+        .expect("liveness probe must be set");
+    let readiness = container
+        .readiness_probe
+        .as_ref()
+        .expect("readiness probe must be set");
 
     // Both probes must be exec (not httpGet) so they send credentials after auth is enabled
     assert!(
