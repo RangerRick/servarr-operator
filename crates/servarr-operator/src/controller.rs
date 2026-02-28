@@ -745,10 +745,15 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
             // disabled when LSIO's env var mechanism doesn't fire).  If we get 401,
             // auth is already enabled (e.g., by LSIO or a previous reconcile) and our
             // credentials should already be correct; confirm by fetching session info.
+            info!(app = %app.name_any(), url = %base_url, "admin-credentials: syncing Transmission RPC auth");
             match servarr_api::TransmissionClient::new(&base_url, None, None) {
                 Ok(c_no_auth) => match c_no_auth.session_set_auth(&username, &password).await {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        info!(app = %app.name_any(), "admin-credentials: Transmission session-set succeeded (auth now enabled)");
+                        Ok(())
+                    }
                     Err(servarr_api::ApiError::ApiResponse { status: 401, .. }) => {
+                        info!(app = %app.name_any(), "admin-credentials: Transmission auth already enabled, verifying credentials");
                         match servarr_api::TransmissionClient::new(
                             &base_url,
                             Some(&username),
@@ -762,7 +767,10 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                             Err(e) => Err(e.to_string()),
                         }
                     }
-                    Err(e) => Err(e.to_string()),
+                    Err(e) => {
+                        warn!(app = %app.name_any(), error = %e, "admin-credentials: Transmission session-set failed");
+                        Err(e.to_string())
+                    }
                 },
                 Err(e) => Err(e.to_string()),
             }

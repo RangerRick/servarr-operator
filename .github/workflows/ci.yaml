@@ -427,3 +427,11 @@ jobs:
           echo ""
           echo "=== ServarrApp status ==="
           kubectl get servarrapps -o yaml || true
+          echo ""
+          echo "=== Transmission diagnostics ==="
+          echo "--- media-transmission env vars ---"
+          kubectl exec deployment/media-transmission -- env 2>/dev/null | grep -E "^USER=|^PASS=" || echo "(exec failed or no USER/PASS)"
+          echo "--- media-transmission settings.json auth fields ---"
+          kubectl exec deployment/media-transmission -- cat /config/settings.json 2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('rpc-authentication-required:', d.get('rpc-authentication-required')); print('rpc-username:', d.get('rpc-username'))" \
+            2>/dev/null || echo "(exec or parse failed)"
