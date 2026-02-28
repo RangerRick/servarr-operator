@@ -225,19 +225,17 @@ check_transmission_auth() {
   local deadline=$(( $(date +%s) + 60 ))
   while true; do
     # Step 1: get the session ID.
-    # Capture the full response first for debugging, then extract the ID.
-    local raw_session_resp
-    raw_session_resp=$(curl -si --max-time 10 \
+    # Use grep -m 1 to match only the HTTP response header, not the HTML body
+    # which also contains the text "X-Transmission-Session-Id:" in its CSRF
+    # explanation paragraph.
+    local session_id
+    session_id=$(curl -si --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
-      -d '{"method":"session-get","arguments":{}}' 2>/dev/null)
-    local session_id
-    session_id=$(echo "$raw_session_resp" \
-      | grep -i "X-Transmission-Session-Id:" | awk '{print $2}' | tr -d '\r\n')
+      -d '{"method":"session-get"}' 2>/dev/null \
+      | grep -i -m 1 "X-Transmission-Session-Id:" | awk '{print $2}' | tr -d '\r')
 
     if [[ -z "$session_id" ]]; then
-      echo "  DEBUG: no session ID in response (first 5 lines):"
-      echo "$raw_session_resp" | head -5 | sed 's/^/    /'
       if [[ $(date +%s) -ge $deadline ]]; then
         echo "  media-transmission: FAIL (could not obtain session ID)"
         return 1
@@ -246,29 +244,22 @@ check_transmission_auth() {
       continue
     fi
 
-    echo "  DEBUG: session_id=[${session_id}]"
-
     # Step 2: with session ID but no credentials → 401 when auth is enabled
-    local resp_no_auth status_no_auth
-    resp_no_auth=$(curl -si --max-time 10 \
+    local status_no_auth
+    status_no_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
       -H "X-Transmission-Session-Id: ${session_id}" \
-      -d '{"method":"session-get","arguments":{}}' 2>/dev/null)
-    status_no_auth=$(echo "$resp_no_auth" | head -1 | awk '{print $2}')
+      -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
     # Step 3: with session ID + correct credentials → 200
-    local resp_with_auth status_with_auth
-    resp_with_auth=$(curl -si --max-time 10 \
+    local status_with_auth
+    status_with_auth=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
       -X POST "http://localhost:${lport}/transmission/rpc" \
       -H 'Content-Type: application/json' \
       -H "X-Transmission-Session-Id: ${session_id}" \
       -u "${ADMIN_USER}:${ADMIN_PASS}" \
-      -d '{"method":"session-get","arguments":{}}' 2>/dev/null)
-    status_with_auth=$(echo "$resp_with_auth" | head -1 | awk '{print $2}')
-
-    echo "  DEBUG: no-auth first line: $(echo "$resp_no_auth" | head -1)"
-    echo "  DEBUG: with-auth first line: $(echo "$resp_with_auth" | head -1)"
+      -d '{"method":"session-get"}' 2>/dev/null || echo "000")
 
     if [[ "$status_no_auth" == "401" && "$status_with_auth" == "200" ]]; then
       echo "  media-transmission: OK (auth enforced: no-auth=401, correct-creds=200)"
@@ -278,8 +269,6 @@ check_transmission_auth() {
     if [[ $(date +%s) -ge $deadline ]]; then
       echo "  media-transmission: FAIL (expected no-auth=401 and correct-creds=200," \
            "got no-auth=${status_no_auth} and correct-creds=${status_with_auth})"
-      echo "  DEBUG: no-auth body: $(echo "$resp_no_auth" | tail -3)"
-      echo "  DEBUG: with-auth body: $(echo "$resp_with_auth" | tail -3)"
       return 1
     fi
     sleep 10
