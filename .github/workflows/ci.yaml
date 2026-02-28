@@ -307,111 +307,20 @@ jobs:
           name: operator-image
           path: /tmp
 
-      - name: Load operator image into Docker
-        run: gunzip -c /tmp/servarr-operator-ci.tar.gz | docker load
-
-      # Start the local registry before the kind cluster so that when pods
-      # start they can pull images from kind-registry:5000 (internal) which
-      # is backed by localhost:5000 (host) where we push all images.
-      - name: Start local registry
-        run: docker run -d --name kind-registry --restart=always -p 127.0.0.1:5000:5000 registry:2
-
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: kind
           wait: 120s
-          config: .github/kind-config.yaml
 
-      # Connect the registry to the kind Docker network so kind nodes can
-      # reach it by hostname, then configure containerd's hosts.d so it
-      # treats kind-registry:5000 as a trusted HTTP registry.
-      # containerd v2 re-reads hosts.d per request — no restart needed.
-      - name: Connect registry to kind network and configure containerd
+      # The operator image is built in CI and not published anywhere yet, so
+      # we load it directly into kind's containerd. App images are all public
+      # and will be pulled from their upstream registries as pods start.
+      - name: Load operator image into kind
         run: |
-          docker network connect kind kind-registry
-          docker exec kind-control-plane mkdir -p \
-            /etc/containerd/certs.d/kind-registry:5000
-          printf '%s\n' \
-            'server = "http://kind-registry:5000"' \
-            '' \
-            '[host."http://kind-registry:5000"]' \
-            '  capabilities = ["pull", "resolve"]' \
+          gunzip -c /tmp/servarr-operator-ci.tar.gz \
             | docker exec -i kind-control-plane \
-                tee /etc/containerd/certs.d/kind-registry:5000/hosts.toml \
-                > /dev/null
-
-      # Cache each app image as a separate file so that bumping one tag
-      # only re-pulls that single image instead of invalidating ~3GB.
-      - name: Compute per-image cache key
-        id: image-cache-key
-        run: |
-          hash=$(sha256sum image-defaults.toml | cut -d' ' -f1)
-          echo "key=app-images-${hash}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached app images
-        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: /tmp/app-images
-          key: ${{ steps.image-cache-key.outputs.key }}
-          restore-keys: app-images-
-
-      # Pull any images not in the cache, then push all images to the local
-      # registry. Images are tagged without their upstream registry hostname
-      # so containerd can pull them as kind-registry:5000/<repo>:<tag>.
-      # The operator's defaultImages values are overridden to use the local
-      # registry so no containerd mirror config is needed.
-      - name: Pull and push app images to local registry
-        run: |
-          mkdir -p /tmp/app-images
-
-          images=$(awk -F' *= *' '
-            /^\[/ { name=substr($0,2,length($0)-2) }
-            $1=="repository" { gsub(/"/, "", $2); repo=$2 }
-            $1=="tag" { gsub(/"/, "", $2); tag=$2;
-              if(repo && tag) print name, repo":"tag;
-              repo=""; tag="" }
-          ' image-defaults.toml)
-
-          # Build a Helm values override file for defaultImages
-          echo "defaultImages:" > /tmp/image-overrides.yaml
-
-          pulled=0
-          while read -r name image; do
-            safe_name="${name//\//_}"
-            file="/tmp/app-images/${safe_name}.tar.gz"
-            marker="/tmp/app-images/${safe_name}.ref"
-
-            if [[ -f "$file" && -f "$marker" && "$(cat "$marker")" == "$image" ]]; then
-              echo "  ${name}: loading from cache (${image})"
-              docker load < <(gunzip -c "$file")
-            else
-              echo "  ${name}: pulling ${image}"
-              docker pull --platform linux/amd64 "$image"
-              docker save "$image" | gzip > "$file"
-              echo "$image" > "$marker"
-              pulled=$((pulled + 1))
-            fi
-
-            # Strip registry hostname prefix (ghcr.io/, quay.io/) so the
-            # local registry path matches the image name pods use.
-            local_path="${image%:*}"
-            local_path="${local_path#ghcr.io/}"
-            local_path="${local_path#quay.io/}"
-            tag="${image##*:}"
-            docker tag "$image" "localhost:5000/${local_path}:${tag}"
-            docker push "localhost:5000/${local_path}:${tag}"
-
-            printf "  %s:\n    repository: kind-registry:5000/%s\n" \
-              "$name" "$local_path" >> /tmp/image-overrides.yaml
-          done <<< "$images"
-
-          echo "Pulled ${pulled} new image(s), $(echo "$images" | wc -l | tr -d ' ') total"
-
-      - name: Push operator image to local registry
-        run: |
-          docker tag servarr-operator:ci localhost:5000/servarr-operator:ci
-          docker push localhost:5000/servarr-operator:ci
+                ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 
       - name: Install CRDs
         run: |
@@ -423,10 +332,9 @@ jobs:
         run: |
           helm dependency build charts/servarr-operator/
           helm template smoke charts/servarr-operator/ \
-            -f /tmp/image-overrides.yaml \
-            --set image.repository=kind-registry:5000/servarr-operator \
+            --set image.repository=servarr-operator \
             --set image.tag=ci \
-            --set image.pullPolicy=IfNotPresent \
+            --set image.pullPolicy=Never \
             --set webhook.enabled=false \
             --set watchAllNamespaces=true \
             | kubectl apply -f -

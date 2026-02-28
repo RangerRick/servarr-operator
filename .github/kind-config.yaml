@@ -1,9 +1,0 @@
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-# Tell containerd v2 to use the hosts.d directory for per-registry config.
-# This allows us to add kind-registry:5000 as an insecure HTTP registry
-# after the cluster is created, without restarting containerd.
-containerdConfigPatches:
-- |-
-  [plugins."io.containerd.grpc.v1.cri".registry]
-    config_path = "/etc/containerd/certs.d"
