@@ -785,6 +785,34 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
                 ..Default::default()
             });
         }
+        // Transmission: LSIO container reads USER/PASS env vars to enable RPC
+        // auth at startup, avoiding the live-API race condition from session-set.
+        if matches!(app.spec.app, AppType::Transmission) {
+            env.push(EnvVar {
+                name: "USER".into(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: ac.secret_name.clone(),
+                        key: "username".into(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            env.push(EnvVar {
+                name: "PASS".into(),
+                value_from: Some(EnvVarSource {
+                    secret_key_ref: Some(SecretKeySelector {
+                        name: ac.secret_name.clone(),
+                        key: "password".into(),
+                        optional: Some(false),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
     }
 
     // Transmission auth from secret

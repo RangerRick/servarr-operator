@@ -82,6 +82,20 @@ struct StartupRemoteAccessRequest {
     enable_automatic_port_mapping: bool,
 }
 
+/// Rewraps an `ApiError` with a step-name prefix in the body, preserving the
+/// original HTTP status code. Used to distinguish which wizard step failed.
+fn wrap_step_err(step: &str, e: ApiError) -> ApiError {
+    let status = if let ApiError::ApiResponse { status, .. } = &e {
+        *status
+    } else {
+        500
+    };
+    ApiError::ApiResponse {
+        status,
+        body: format!("{step}: {e}"),
+    }
+}
+
 /// Authorization header value required by the Jellyfin startup wizard endpoints.
 const JELLYFIN_AUTH_HEADER: &str = concat!(
     r#"MediaBrowser Client="servarr-operator", "#,
@@ -157,6 +171,31 @@ impl JellyfinClient {
             Ok(())
         } else {
             let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::ApiResponse { status, body })
+        }
+    }
+
+    /// Read the initial-user config via `GET /Startup/FirstUser`.
+    ///
+    /// Required by some Jellyfin versions (≥ 10.9) to advance the wizard state
+    /// past the user-creation step before calling `POST /Startup/User`.
+    /// Returns `Ok(())` on 200/204 and on 404 (endpoint not present in older
+    /// versions); returns `Err` only for unexpected status codes.
+    async fn startup_get_first_user(&self) -> Result<(), ApiError> {
+        let url = self.http.base_url().join("/Startup/FirstUser")?;
+        let resp = self
+            .http
+            .inner()
+            .get(url)
+            .header("X-Emby-Authorization", JELLYFIN_AUTH_HEADER)
+            .send()
+            .await
+            .map_err(ApiError::Request)?;
+        let status = resp.status().as_u16();
+        if resp.status().is_success() || status == 404 {
+            Ok(())
+        } else {
             let body = resp.text().await.unwrap_or_default();
             Err(ApiError::ApiResponse { status, body })
         }
@@ -299,16 +338,35 @@ impl JellyfinClient {
 
     /// Configure the Jellyfin admin account.
     ///
-    /// If the startup wizard is pending, sets the initial admin via the wizard.
+    /// If the startup wizard is pending, runs the full wizard sequence.
     /// Otherwise, authenticates as the existing admin and changes the password.
+    ///
+    /// Each wizard step is wrapped with its name so failures are identifiable
+    /// in operator logs (e.g. `startup_configure: API returned 500: …`).
     pub async fn configure_admin(&self, username: &str, password: &str) -> Result<(), ApiError> {
         if self.startup_pending().await? {
-            // Run the full startup wizard flow. Jellyfin ≥ 10.9 requires each
-            // step in order; skipping any step causes subsequent ones to 500.
-            self.startup_configure().await?;
-            self.startup_set_user(username, password).await?;
-            self.startup_set_remote_access().await?;
-            return self.startup_complete().await;
+            // Step 1: set locale/language (required before user creation in ≥ 10.9).
+            self.startup_configure()
+                .await
+                .map_err(|e| wrap_step_err("startup_configure", e))?;
+            // Step 2: GET /Startup/FirstUser advances the wizard state machine in
+            // some Jellyfin versions. Non-fatal if the endpoint returns 404.
+            self.startup_get_first_user()
+                .await
+                .map_err(|e| wrap_step_err("startup_get_first_user", e))?;
+            // Step 3: create the initial admin user.
+            self.startup_set_user(username, password)
+                .await
+                .map_err(|e| wrap_step_err("startup_set_user", e))?;
+            // Step 4: enable remote access.
+            self.startup_set_remote_access()
+                .await
+                .map_err(|e| wrap_step_err("startup_set_remote_access", e))?;
+            // Step 5: complete the wizard.
+            return self
+                .startup_complete()
+                .await
+                .map_err(|e| wrap_step_err("startup_complete", e));
         }
 
         // Wizard complete: authenticate as the admin user and update the password.
@@ -509,6 +567,13 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/Startup/Configuration"))
             .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // startup_get_first_user (GET /Startup/FirstUser)
+        Mock::given(method("GET"))
+            .and(path("/Startup/FirstUser"))
+            .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
             .await;

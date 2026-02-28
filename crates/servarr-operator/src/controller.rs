@@ -369,9 +369,16 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // sync_admin_credentials on every reconcile — they do NOT need a rolling
     // restart and must NOT get the checksum annotation (it would cause an
     // unnecessary restart that delays the startup wizard).
+    // Sonarr/Radarr/Lidarr/Prowlarr use ASP.NET Core env var overrides.
+    // Transmission uses LSIO's USER/PASS env vars.
+    // All of these require a pod restart when the secret rotates.
     let uses_env_var_creds = matches!(
         app.spec.app,
-        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
+        AppType::Sonarr
+            | AppType::Radarr
+            | AppType::Lidarr
+            | AppType::Prowlarr
+            | AppType::Transmission
     );
     if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
@@ -733,16 +740,8 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                 Err(e) => Err(e.to_string()),
             }
         }
-        AppType::Transmission => {
-            match servarr_api::TransmissionClient::new(&base_url, Some(&username), Some(&password))
-            {
-                Ok(c) => c
-                    .session_set_auth(&username, &password)
-                    .await
-                    .map_err(|e| e.to_string()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
+        // Transmission uses USER/PASS env vars (see deployment builder).
+        // No live API call needed; auth is set at pod startup.
         AppType::Jellyfin => match servarr_api::JellyfinClient::new(&base_url) {
             Ok(c) => c
                 .configure_admin(&username, &password)
