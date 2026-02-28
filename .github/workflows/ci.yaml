@@ -321,12 +321,25 @@ jobs:
         with:
           cluster_name: kind
           wait: 120s
+          config: .github/kind-config.yaml
 
-      # Connect the registry container to the kind Docker network so that
-      # kind nodes can resolve "kind-registry:5000" without any containerd
-      # mirror config.
-      - name: Connect registry to kind network
-        run: docker network connect kind kind-registry
+      # Connect the registry to the kind Docker network so kind nodes can
+      # reach it by hostname, then configure containerd's hosts.d so it
+      # treats kind-registry:5000 as a trusted HTTP registry.
+      # containerd v2 re-reads hosts.d per request — no restart needed.
+      - name: Connect registry to kind network and configure containerd
+        run: |
+          docker network connect kind kind-registry
+          docker exec kind-control-plane mkdir -p \
+            /etc/containerd/certs.d/kind-registry:5000
+          printf '%s\n' \
+            'server = "http://kind-registry:5000"' \
+            '' \
+            '[host."http://kind-registry:5000"]' \
+            '  capabilities = ["pull", "resolve"]' \
+            | docker exec -i kind-control-plane \
+                tee /etc/containerd/certs.d/kind-registry:5000/hosts.toml \
+                > /dev/null
 
       # Cache each app image as a separate file so that bumping one tag
       # only re-pulls that single image instead of invalidating ~3GB.
