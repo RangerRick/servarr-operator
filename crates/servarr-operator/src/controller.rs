@@ -446,7 +446,6 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
             .patch(&name, &pp, &Patch::Apply(route_data))
             .await
             .map_err(Error::Kube)?;
-        tracing::debug!(%name, "SSA: HTTPRoute applied successfully");
     }
 
     // Build and apply cert-manager Certificate (if TLS is enabled)
