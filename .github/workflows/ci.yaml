@@ -355,6 +355,50 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/servarr-operator
           retention-days: 1
 
+  # macOS: runs when a snapshot publish is needed or [full-build] is set.
+  # Produces amd64 and arm64 Darwin binaries for the publish job.
+  build-macos:
+    needs: [fmt, actionlint, zizmor, detect-flags]
+    if: >-
+      needs.detect-flags.outputs.run_snapshot == 'true' ||
+      needs.detect-flags.outputs.full_build == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          cache-on-failure: true
+          key: macos
+
+      - name: Install macOS targets
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target x86_64-apple-darwin --bin servarr-operator
+          cargo build --release --target aarch64-apple-darwin --bin servarr-operator
+
+      - name: Upload macOS amd64 binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: operator-binary-darwin-amd64
+          path: target/x86_64-apple-darwin/release/servarr-operator
+          retention-days: 1
+
+      - name: Upload macOS arm64 binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: operator-binary-darwin-arm64
+          path: target/aarch64-apple-darwin/release/servarr-operator
+          retention-days: 1
+
   # ── Stage 3: Integration smoke test ───────────────────────────────────
   # Runs automatically on main and workflow_dispatch.
   # On branches: also runs when .github/smoke-test/** or CRD sources change,
@@ -502,7 +546,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: [detect-flags, version, build, build-arm64, smoke-test]
+    needs: [detect-flags, version, build, build-arm64, build-macos, smoke-test]
     if: needs.detect-flags.outputs.run_snapshot == 'true'
     permissions:
       contents: write
@@ -525,6 +569,18 @@ jobs:
         with:
           name: operator-binary-linux-arm64
           path: /tmp/bin-arm64
+
+      - name: Download macOS amd64 binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: operator-binary-darwin-amd64
+          path: /tmp/bin-darwin-amd64
+
+      - name: Download macOS arm64 binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: operator-binary-darwin-arm64
+          path: /tmp/bin-darwin-arm64
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
@@ -588,3 +644,27 @@ jobs:
               -d /tmp/charts
             helm push "/tmp/charts/${chart}-${CHART_VERSION}.tgz" "${HELM_REGISTRY}"
           done
+
+      - name: Publish binaries as GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DATE: ${{ needs.version.outputs.date }}
+        run: |
+          chmod +x \
+            /tmp/bin-amd64/servarr-operator \
+            /tmp/bin-arm64/servarr-operator \
+            /tmp/bin-darwin-amd64/servarr-operator \
+            /tmp/bin-darwin-arm64/servarr-operator
+
+          tag="snapshot-${DATE}"
+          # Replace any existing release for this date tag.
+          gh release delete "${tag}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${tag}" \
+            --prerelease \
+            --title "Snapshot ${DATE}" \
+            --generate-notes \
+            --target "${GITHUB_SHA}" \
+            "/tmp/bin-amd64/servarr-operator#servarr-operator-linux-x86_64" \
+            "/tmp/bin-arm64/servarr-operator#servarr-operator-linux-aarch64" \
+            "/tmp/bin-darwin-amd64/servarr-operator#servarr-operator-darwin-x86_64" \
+            "/tmp/bin-darwin-arm64/servarr-operator#servarr-operator-darwin-aarch64"
