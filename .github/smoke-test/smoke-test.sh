@@ -128,27 +128,49 @@ echo "Smoke tests passed."
 echo ""
 echo "Phase 3: adminCredentials transition — patching MediaStack to add credentials"
 
+# Capture current deployment generation for each media app before patching.
+# We wait for the generation to increase (operator reconciled + patched the
+# Deployment) and then for the rollout to complete (new pods ready).
+declare -A PRE_GEN
+for app in media-sonarr media-jellyfin media-transmission; do
+  PRE_GEN[$app]=$(kubectl get deployment "$app" \
+    -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "1")
+done
+
 kubectl patch mediastack media --type=merge \
   -p '{"spec":{"defaults":{"adminCredentials":{"secretName":"smoke-admin"}}}}'
 
-echo "  Patch applied.  Waiting for media-* deployments to cycle (up to 300s)..."
+echo "  Patch applied.  Waiting for media-* rollouts to complete (up to 300s)..."
 TRANSITION_TIMEOUT=300
 elapsed=0
 while true; do
-  all_ready=true
+  all_done=true
   for app in media-sonarr media-jellyfin media-transmission; do
-    ready=$(kubectl get deployment "$app" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-    if [[ "${ready:-0}" -lt 1 ]]; then
-      all_ready=false
+    gen=$(kubectl get deployment "$app" \
+      -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "${PRE_GEN[$app]}")
+    obs=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo "0")
+    updated=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || echo "0")
+    desired=$(kubectl get deployment "$app" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+    ready=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    # Wait for the operator to bump the generation AND the rollout to complete.
+    if [[ "$gen" -le "${PRE_GEN[$app]}" \
+        || "$obs" -lt "$gen" \
+        || "${updated:-0}" -lt "${desired:-1}" \
+        || "${ready:-0}" -lt "${desired:-1}" ]]; then
+      all_done=false
       break
     fi
   done
-  if $all_ready; then
-    echo "  All media-* deployments are ready after transition."
+  if $all_done; then
+    echo "  All media-* deployments completed their rollout."
     break
   fi
   if [[ $elapsed -ge $TRANSITION_TIMEOUT ]]; then
-    echo "ERROR: media-* deployments not all ready after credential transition (${TRANSITION_TIMEOUT}s)"
+    echo "ERROR: media-* rollouts not complete after credential transition (${TRANSITION_TIMEOUT}s)"
     kubectl get deployments -l "app.kubernetes.io/instance=media" -o wide
     exit 1
   fi
@@ -193,7 +215,7 @@ with_port_forward() {
 cred_pass=0
 cred_fail=0
 
-# --- Sonarr: env vars inject Forms auth credentials.
+# --- Sonarr: operator applies Forms auth credentials via PUT /api/v3/config/host.
 #
 # Verification sequence:
 #   1. Unauthenticated API call returns 401 (Forms auth enforced).

@@ -370,21 +370,19 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     tracing::debug!(%name, "ensuring API key secret");
     ensure_api_key_secret(client, &app, &ns).await?;
 
-    // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) admin credentials are
-    // injected as secretKeyRef env vars at startup.  Patch a checksum annotation
-    // so Kubernetes rolls the pods when the Secret rotates.
+    // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) credentials are applied
+    // via PUT /api/v3/config/host after each pod start (sync_admin_credentials).
+    // Patch a checksum annotation on the pod template so Kubernetes rolls pods
+    // when the Secret rotates, giving sync_admin_credentials a fresh target.
     //
-    // API-based apps (Jellyfin, Transmission, Tautulli, Overseerr) receive
-    // credentials via sync_admin_credentials on every reconcile — they do NOT
-    // need a rolling restart.  Transmission in particular MUST NOT get a
-    // checksum annotation: the LSIO init script rewrites settings.json on every
-    // container start, so a rolling update would race and reset auth to false
-    // before the operator's next reconcile can re-apply it via RPC.
-    let uses_env_var_creds = matches!(
+    // Transmission MUST NOT get a checksum annotation: the LSIO init script
+    // rewrites settings.json on every container start, so a rolling update would
+    // race and reset auth to false before the next reconcile can re-apply it.
+    let needs_rollout_on_secret_change = matches!(
         app.spec.app,
         AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
     );
-    if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
+    if needs_rollout_on_secret_change && let Some(ref ac) = app.spec.admin_credentials {
         tracing::debug!(%name, secret_name = %ac.secret_name, "patching admin credentials checksum");
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
     }
@@ -862,8 +860,11 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                 Ok(c) => match c.configure_admin(&username, &password).await {
                     Ok(()) => Ok(()),
                     Err(servarr_api::ApiError::ApiResponse { status: 401, .. }) => {
-                        // Auth already enabled but we lack a valid API key to reconfigure.
-                        // Leave the condition unchanged rather than reporting a spurious failure.
+                        // Auth is already enabled and we have no valid API key to reach it.
+                        // This can happen if the pod started with stale auth env vars or was
+                        // configured out-of-band.  Leave the condition unchanged; the operator
+                        // will retry on the next reconcile (triggered by pod/Deployment events).
+                        warn!(app = %app.name_any(), "admin-credentials: configure_admin returned 401 — auth already active, no api key");
                         return None;
                     }
                     Err(e) => Err(e.to_string()),

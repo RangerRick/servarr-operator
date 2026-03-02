@@ -776,52 +776,7 @@ fn build_env_vars(app: &ServarrApp, defaults: &AppDefaults, uid: i64, gid: i64) 
         }
     }
 
-    // Admin credentials for Servarr v3 apps.
-    // Sonarr, Radarr, Lidarr, and Prowlarr support setting auth via the
-    // ASP.NET Core double-underscore env var override pattern. When
-    // adminCredentials is set, inject USERNAME, PASSWORD, and METHOD=Forms so
-    // the app enforces form-based login from first startup.
-    // A checksum annotation (managed by the controller) triggers a rolling
-    // update when the secret rotates.
     if let Some(ref ac) = app.spec.admin_credentials {
-        let prefix = match app.spec.app {
-            AppType::Sonarr => Some("SONARR"),
-            AppType::Radarr => Some("RADARR"),
-            AppType::Lidarr => Some("LIDARR"),
-            AppType::Prowlarr => Some("PROWLARR"),
-            _ => None,
-        };
-        if let Some(p) = prefix {
-            env.push(EnvVar {
-                name: format!("{p}__AUTH__USERNAME"),
-                value_from: Some(EnvVarSource {
-                    secret_key_ref: Some(SecretKeySelector {
-                        name: ac.secret_name.clone(),
-                        key: "username".into(),
-                        optional: Some(false),
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-            env.push(EnvVar {
-                name: format!("{p}__AUTH__PASSWORD"),
-                value_from: Some(EnvVarSource {
-                    secret_key_ref: Some(SecretKeySelector {
-                        name: ac.secret_name.clone(),
-                        key: "password".into(),
-                        optional: Some(false),
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-            env.push(EnvVar {
-                name: format!("{p}__AUTH__METHOD"),
-                value: Some("Forms".into()),
-                ..Default::default()
-            });
-        }
         // Transmission: enable RPC authentication via the LSIO FILE__ mechanism.
         //
         // LSIO's init-transmission-config runs with `with-contenv bash`, reading

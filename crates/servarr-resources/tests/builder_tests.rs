@@ -3285,92 +3285,59 @@ fn get_env(app: &ServarrApp) -> Vec<k8s_openapi::api::core::v1::EnvVar> {
         .unwrap_or_default()
 }
 
-fn secret_key_ref_name(
-    env: &[k8s_openapi::api::core::v1::EnvVar],
-    var_name: &str,
-) -> Option<String> {
-    find_env(env, var_name).and_then(|e| {
-        e.value_from
-            .as_ref()
-            .and_then(|vf| vf.secret_key_ref.as_ref())
-            .map(|skr| skr.name.clone())
-    })
-}
-
 #[test]
-fn test_admin_credentials_sonarr_injects_env_vars() {
+fn test_admin_credentials_sonarr_no_auth_env_vars() {
+    // Auth is configured via PUT /api/v3/config/host, not env vars.
+    // Env var injection caused Sonarr to store plaintext passwords (not BCrypt-hashed),
+    // making login always fail.
     let mut app = make_app(AppType::Sonarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "my-admin".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "SONARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
-    assert_eq!(
-        secret_key_ref_name(&env, "SONARR__AUTH__USERNAME"),
-        Some("my-admin".into())
-    );
-    assert_eq!(
-        secret_key_ref_name(&env, "SONARR__AUTH__PASSWORD"),
-        Some("my-admin".into())
-    );
+    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_radarr_injects_env_vars() {
+fn test_admin_credentials_radarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Radarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "radarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "RADARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "RADARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "RADARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "RADARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "RADARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "RADARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_lidarr_injects_env_vars() {
+fn test_admin_credentials_lidarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Lidarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "lidarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "LIDARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "LIDARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "LIDARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "LIDARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "LIDARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "LIDARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_prowlarr_injects_env_vars() {
+fn test_admin_credentials_prowlarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Prowlarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "prowlarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "PROWLARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "PROWLARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "PROWLARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "PROWLARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "PROWLARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "PROWLARR__AUTH__METHOD").is_none());
 }
 
 #[test]
