@@ -15,11 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 # publish (snapshot) requires contents: write and packages: write.
-# Job-level permissions cannot exceed the workflow-level grant, so we must
-# declare them here.  All other jobs use only contents: read in practice.
+# Those permissions are declared at the job level on the publish job.
+# All other jobs explicitly limit themselves to contents: read.
 permissions:
-  contents: write  # zizmor: ignore[excessive-permissions]
-  packages: write  # zizmor: ignore[excessive-permissions]
+  contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,6 +30,8 @@ jobs:
   # ── Stage 0: Detect flags and changed paths ────────────────────────────
   detect-flags:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       full_build: ${{ steps.parse.outputs.full_build }}
       run_smoke: ${{ steps.parse.outputs.run_smoke }}
@@ -93,6 +95,8 @@ jobs:
   # ── Stage 1: Fast lint ─────────────────────────────────────────────────
   fmt:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -104,6 +108,8 @@ jobs:
 
   actionlint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -115,6 +121,8 @@ jobs:
 
   zizmor:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -128,6 +136,8 @@ jobs:
 
   helm-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -151,6 +161,8 @@ jobs:
   clippy:
     needs: [fmt, actionlint, zizmor]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -166,6 +178,8 @@ jobs:
   test:
     needs: [fmt, actionlint, zizmor]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -201,6 +215,8 @@ jobs:
   crd-drift:
     needs: [build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -244,6 +260,8 @@ jobs:
   build:
     needs: [fmt, actionlint, zizmor]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -299,6 +317,8 @@ jobs:
       needs.detect-flags.outputs.run_snapshot == 'true' ||
       needs.detect-flags.outputs.full_build == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -348,6 +368,8 @@ jobs:
       needs.detect-flags.outputs.smoke_files_changed == 'true' ||
       needs.detect-flags.outputs.crd_files_changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -464,6 +486,8 @@ jobs:
     needs: [detect-flags]
     if: needs.detect-flags.outputs.run_snapshot == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       date: ${{ steps.v.outputs.date }}
       chart_version: ${{ steps.v.outputs.chart_version }}
