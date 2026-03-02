@@ -18,8 +18,8 @@ concurrency:
 # Job-level permissions cannot exceed the workflow-level grant, so we must
 # declare them here.  All other jobs use only contents: read in practice.
 permissions:
-  contents: write # zizmor: ignore[excessive-permissions]
-  packages: write
+  contents: write  # zizmor: ignore[excessive-permissions]
+  packages: write  # zizmor: ignore[excessive-permissions]
 
 env:
   CARGO_TERM_COLOR: always

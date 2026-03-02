@@ -3583,7 +3583,7 @@ fn test_dynamic_object_serialization_preserves_type_meta() {
 /// Same check for httproute::build output.
 #[test]
 fn test_httproute_ssa_body_has_type_meta() {
-    use servarr_crds::{GatewaySpec, GatewayParentRef, RouteType};
+    use servarr_crds::{GatewayParentRef, GatewaySpec, RouteType};
     let app = ServarrApp {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             name: Some("test-app".into()),
