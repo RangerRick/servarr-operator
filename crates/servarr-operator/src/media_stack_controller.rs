@@ -246,9 +246,9 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
 
             // Inject metadata. serde_json::to_value on a struct always produces
             // an object, so these casts are guaranteed by the type system.
-            let child_obj = child_value
-                .as_object_mut()
-                .ok_or(Error::Internal("serialized ServarrApp is not a JSON object"))?;
+            let child_obj = child_value.as_object_mut().ok_or(Error::Internal(
+                "serialized ServarrApp is not a JSON object",
+            ))?;
             let meta = child_obj
                 .entry("metadata")
                 .or_insert_with(|| serde_json::json!({}));
