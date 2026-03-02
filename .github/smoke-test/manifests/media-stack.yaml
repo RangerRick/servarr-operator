@@ -7,3 +7,4 @@ spec:
     - app: Jellyfin
     - app: Transmission
     - app: Sonarr
+      apiKeySecret: smoke-sonarr-api-key
