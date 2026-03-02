@@ -656,7 +656,13 @@ async fn patch_admin_credentials_checksum(
 
     let name = app.name_any();
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), ns);
+    // Use a separate field manager so this annotation does not conflict with
+    // the main SSA apply (FIELD_MANAGER), which would strip it on the next cycle.
+    let pp = PatchParams::apply("servarr-operator/admin-credentials").force();
     let patch = serde_json::json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": { "name": name },
         "spec": {
             "template": {
                 "metadata": {
@@ -668,7 +674,7 @@ async fn patch_admin_credentials_checksum(
         }
     });
     deploy_api
-        .patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+        .patch(&name, &pp, &Patch::Apply(patch))
         .await
         .map_err(Error::Kube)?;
 
