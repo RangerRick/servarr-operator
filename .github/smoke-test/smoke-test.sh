@@ -193,19 +193,81 @@ with_port_forward() {
 cred_pass=0
 cred_fail=0
 
-# --- Sonarr: env vars cause Forms auth → unauthenticated API returns 401 ---
+# --- Sonarr: env vars inject Forms auth credentials.
+#
+# Verification sequence:
+#   1. Unauthenticated API call returns 401 (Forms auth enforced).
+#   2. GET /login returns 200 — the login page is shown, not the first-run
+#      setup wizard (which would mean credentials were never applied).
+#   3. POST /login with correct credentials redirects to the dashboard (not
+#      back to /login?loginFailed=...).
+#
+# Retry up to 60s because Sonarr may still be initialising on first boot. ---
 check_sonarr_auth() {
   local lport=$1
-  local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    "http://localhost:${lport}/api/v3/system/status" 2>/dev/null || echo "000")
-  if [[ "$status" == "401" ]]; then
-    echo "  media-sonarr: OK (Forms auth enforced — unauthenticated API returns 401)"
+
+  local deadline=$(( $(date +%s) + 60 ))
+  while true; do
+    # Step 1: unauthenticated API must return 401.
+    local status_api
+    status_api=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      "http://localhost:${lport}/api/v3/system/status" 2>/dev/null || echo "000")
+
+    if [[ "$status_api" != "401" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (expected unauthenticated API to return 401, got ${status_api})"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 2: /login must return 200 (not a redirect to the setup wizard).
+    local login_status
+    login_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -L "http://localhost:${lport}/login" 2>/dev/null || echo "000")
+
+    if [[ "$login_status" != "200" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (expected /login to return 200, got ${login_status}" \
+             "— first-run setup wizard may still be active)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 3: POST /login with correct credentials must redirect to the
+    # dashboard.  A redirect back to /login (with loginFailed) means the
+    # credentials were not applied.
+    local location
+    location=$(curl -si --max-time 10 \
+      -X POST "http://localhost:${lport}/login?returnUrl=%2F" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" \
+      2>/dev/null | grep -i "^location:" | awk '{print $2}' | tr -d '\r')
+
+    if [[ -z "$location" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (POST /login returned no Location header)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    if [[ "$location" == *"/login"* ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (POST /login redirected to ${location} — credentials rejected)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    echo "  media-sonarr: OK (Forms auth: unauth API=401, login page reachable, credentials authenticate)"
     return 0
-  else
-    echo "  media-sonarr: FAIL (expected 401 for unauthenticated API request, got ${status})"
-    return 1
-  fi
+  done
 }
 
 echo -n ""
