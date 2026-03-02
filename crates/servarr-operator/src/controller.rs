@@ -1352,6 +1352,15 @@ async fn maybe_restore_backup(
     recorder: &Recorder,
     obj_ref: &k8s_openapi::api::core::v1::ObjectReference,
 ) {
+    // Only Servarr v3 apps support backup/restore API
+    if !matches!(
+        app.spec.app,
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
+    ) {
+        warn!(%name, app_type = ?app.spec.app, "restore-from annotation set on unsupported app type, ignoring");
+        return;
+    }
+
     let backup_id: i64 = match restore_id.parse() {
         Ok(id) => id,
         Err(_) => {
