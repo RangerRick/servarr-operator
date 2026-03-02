@@ -3552,3 +3552,74 @@ fn test_admin_credentials_not_set_no_auth_env_vars() {
     assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_none());
     assert!(find_env(&env, "SONARR__AUTH__METHOD").is_none());
 }
+
+/// Verify that DynamicObject serializes apiVersion and kind correctly after the
+/// from_value() round-trip used in httproute::build and certificate::build.
+/// If apiVersion/kind are missing, SSA patches fail with "invalid object type: /, Kind=".
+#[test]
+fn test_dynamic_object_serialization_preserves_type_meta() {
+    let route_json = serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "HTTPRoute",
+        "metadata": {"name": "test", "namespace": "test-ns"},
+        "spec": {"rules": []}
+    });
+    let route: kube::api::DynamicObject =
+        serde_json::from_value(route_json).expect("from_value should succeed");
+    let serialized = serde_json::to_value(&route).expect("to_value should succeed");
+
+    assert_eq!(
+        serialized["apiVersion"].as_str(),
+        Some("gateway.networking.k8s.io/v1"),
+        "apiVersion must survive DynamicObject round-trip"
+    );
+    assert_eq!(
+        serialized["kind"].as_str(),
+        Some("HTTPRoute"),
+        "kind must survive DynamicObject round-trip"
+    );
+}
+
+/// Same check for httproute::build output.
+#[test]
+fn test_httproute_ssa_body_has_type_meta() {
+    use servarr_crds::{GatewaySpec, GatewayParentRef, RouteType};
+    let app = ServarrApp {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some("test-app".into()),
+            namespace: Some("media".into()),
+            uid: Some("test-uid".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Sonarr,
+            gateway: Some(GatewaySpec {
+                enabled: true,
+                route_type: RouteType::Http,
+                parent_refs: vec![GatewayParentRef {
+                    name: "test-gw".into(),
+                    namespace: String::new(),
+                    section_name: String::new(),
+                }],
+                hosts: vec!["sonarr.example.com".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let route = servarr_resources::httproute::build(&app).expect("should build HTTPRoute");
+    let body = serde_json::to_value(&route).expect("should serialize");
+
+    assert_eq!(
+        body["apiVersion"].as_str(),
+        Some("gateway.networking.k8s.io/v1"),
+        "SSA body must contain apiVersion"
+    );
+    assert_eq!(
+        body["kind"].as_str(),
+        Some("HTTPRoute"),
+        "SSA body must contain kind"
+    );
+}

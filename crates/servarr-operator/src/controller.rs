@@ -240,6 +240,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Build and apply Deployment
     let deployment = servarr_resources::deployment::build(&app, &ctx.image_overrides);
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), &ns);
+    tracing::debug!(%name, "SSA: applying Deployment");
     deploy_api
         .patch(&name, &pp, &Patch::Apply(&deployment))
         .await
@@ -248,6 +249,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Check for drift: read back the Deployment and compare only operator-managed fields.
     // Kubernetes adds default fields (terminationGracePeriodSeconds, dnsPolicy, etc.)
     // so we check that our desired fields are a subset of the actual state.
+    tracing::debug!(%name, "getting Deployment for drift check");
     let applied_deploy = deploy_api.get(&name).await.map_err(Error::Kube)?;
     if let (Some(desired_spec), Some(actual_spec)) =
         (deployment.spec.as_ref(), applied_deploy.spec.as_ref())
@@ -273,6 +275,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
                 .map_err(Error::Kube)?;
             increment_drift_corrections(app_type, &ns, "Deployment");
             // Re-apply to correct drift
+            tracing::debug!(%name, "SSA: re-applying Deployment (drift correction)");
             deploy_api
                 .patch(&name, &pp, &Patch::Apply(&deployment))
                 .await
@@ -283,6 +286,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Build and apply Service
     let service = servarr_resources::service::build(&app);
     let svc_api = Api::<Service>::namespaced(client.clone(), &ns);
+    tracing::debug!(%name, "SSA: applying Service");
     svc_api
         .patch(&name, &pp, &Patch::Apply(&service))
         .await
@@ -321,6 +325,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if network_policy_enabled {
         let np = servarr_resources::networkpolicy::build(&app);
         let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, "SSA: applying NetworkPolicy");
         np_api
             .patch(&name, &pp, &Patch::Apply(&np))
             .await
@@ -331,6 +336,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -341,6 +347,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_tar_unpack(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying tar-unpack ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -351,6 +358,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_prowlarr_definitions(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying Prowlarr definitions ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -359,6 +367,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
 
     // Auto-create API key Secret if apiKeySecret is set and the Secret is absent.
     // Uses a get-then-create pattern so an existing key is never overwritten.
+    tracing::debug!(%name, "ensuring API key secret");
     ensure_api_key_secret(client, &app, &ns).await?;
 
     // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) admin credentials are
@@ -376,6 +385,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
     );
     if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
+        tracing::debug!(%name, secret_name = %ac.secret_name, "patching admin credentials checksum");
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
     }
 
@@ -383,6 +393,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(secret) = servarr_resources::secret::build_authorized_keys(&app) {
         let secret_name = secret.metadata.name.as_deref().unwrap_or(&name);
         let secret_api = Api::<Secret>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, secret_name, "SSA: applying SSH bastion authorized-keys Secret");
         secret_api
             .patch(secret_name, &pp, &Patch::Apply(&secret))
             .await
@@ -393,6 +404,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying SSH bastion restricted-rsync ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -413,6 +425,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let route_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let route_data = serde_json::to_value(&route).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying TCPRoute");
         route_api
             .patch(&name, &pp, &Patch::Apply(route_data))
             .await
@@ -428,10 +441,12 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let route_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let route_data = serde_json::to_value(&route).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying HTTPRoute");
         route_api
             .patch(&name, &pp, &Patch::Apply(route_data))
             .await
             .map_err(Error::Kube)?;
+        tracing::debug!(%name, "SSA: HTTPRoute applied successfully");
     }
 
     // Build and apply cert-manager Certificate (if TLS is enabled)
@@ -446,6 +461,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let cert_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let cert_data = serde_json::to_value(&cert).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying Certificate");
         cert_api
             .patch(&name, &pp, &Patch::Apply(cert_data))
             .await
@@ -490,6 +506,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     }
 
     // Update status
+    tracing::debug!(%name, "updating status");
     update_status(
         client,
         &app,

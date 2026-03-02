@@ -117,30 +117,26 @@ fi
 echo "Smoke tests passed."
 
 # ---------------------------------------------------------------------------
-# Phase 3: Admin credential verification
+# Phase 3: adminCredentials transition
 #
-# The MediaStack named 'media' is deployed with adminCredentials pointing at
-# the 'smoke-admin' Secret.  The operator injects env vars for Sonarr and
-# calls the API for Jellyfin/Transmission.  We verify each mechanism works.
+# The MediaStack 'media' was deployed WITHOUT adminCredentials.  Patch it now
+# to add them, which exercises the reconcile path that applies credentials to
+# already-running apps.  This transition is the most likely source of bugs
+# (the first-time credential injection code path).
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "Phase 3: Admin credential verification (MediaStack 'media')"
+echo "Phase 3: adminCredentials transition — patching MediaStack to add credentials"
 
-ADMIN_USER=$(kubectl get secret smoke-admin -o jsonpath='{.data.username}' | base64 -d)
-ADMIN_PASS=$(kubectl get secret smoke-admin -o jsonpath='{.data.password}' | base64 -d)
+kubectl patch mediastack media --type=merge \
+  -p '{"spec":{"defaults":{"adminCredentials":{"secretName":"smoke-admin"}}}}'
 
-# Wait for the media-* deployments to be ready and for the operator to sync
-# credentials (sync happens after each app passes its health check).
-# Use a generous timeout: Jellyfin is heavy and the operator may trigger a
-# rolling restart when it first patches the checksum annotation.
-echo "  Waiting for media-* deployments and credential sync (up to 300s)..."
-MEDIA_APPS=(media-sonarr media-jellyfin media-transmission)
-CRED_TIMEOUT=300
+echo "  Patch applied.  Waiting for media-* deployments to cycle (up to 300s)..."
+TRANSITION_TIMEOUT=300
 elapsed=0
 while true; do
   all_ready=true
-  for app in "${MEDIA_APPS[@]}"; do
+  for app in media-sonarr media-jellyfin media-transmission; do
     ready=$(kubectl get deployment "$app" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
     if [[ "${ready:-0}" -lt 1 ]]; then
       all_ready=false
@@ -148,21 +144,36 @@ while true; do
     fi
   done
   if $all_ready; then
-    echo "  All media-* deployments are ready."
+    echo "  All media-* deployments are ready after transition."
     break
   fi
-  if [[ $elapsed -ge $CRED_TIMEOUT ]]; then
-    echo "  WARNING: media-* deployments not all ready after ${CRED_TIMEOUT}s — skipping Phase 3"
-    echo "Smoke tests passed (Phase 3 skipped)."
-    exit 0
+  if [[ $elapsed -ge $TRANSITION_TIMEOUT ]]; then
+    echo "ERROR: media-* deployments not all ready after credential transition (${TRANSITION_TIMEOUT}s)"
+    kubectl get deployments -l "app.kubernetes.io/instance=media" -o wide
+    exit 1
   fi
-  echo "  Waiting for media-* deployments... (${elapsed}s/${CRED_TIMEOUT}s)"
+  echo "  Waiting... (${elapsed}s/${TRANSITION_TIMEOUT}s)"
   sleep 10
   elapsed=$((elapsed + 10))
 done
 
-# Extra dwell time for the operator to finish the credential-sync API calls.
-# Jellyfin's startup wizard can take a moment to respond after first boot.
+# ---------------------------------------------------------------------------
+# Phase 4: Admin credential verification
+#
+# The MediaStack now has adminCredentials pointing at the 'smoke-admin' Secret.
+# The operator injects env vars for Sonarr and calls the API for
+# Jellyfin/Transmission.  We verify each mechanism works.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "Phase 4: Admin credential verification (MediaStack 'media')"
+
+ADMIN_USER=$(kubectl get secret smoke-admin -o jsonpath='{.data.username}' | base64 -d)
+ADMIN_PASS=$(kubectl get secret smoke-admin -o jsonpath='{.data.password}' | base64 -d)
+
+# All media-* deployments are already confirmed ready by Phase 3.
+# Extra dwell time for the operator to finish live API credential-sync calls
+# (Jellyfin startup wizard can take a moment to respond after first boot).
 sleep 40
 
 # Helper: port-forward to a deployment, run a check function, then clean up.
