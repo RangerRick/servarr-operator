@@ -7,7 +7,6 @@ on:
       - "docs/**"
       - "**.md"
       - "LICENSE"
-  pull_request:
   workflow_dispatch:
 
 concurrency:

@@ -837,7 +837,40 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                 .await
                 .map_err(|e| e.to_string())
         }
-        // Servarr v3 apps: handled by env vars + checksum annotation (see deployment builder)
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr => {
+            let api_key = match app.spec.api_key_secret.as_deref() {
+                Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
+                    Ok(k) => k,
+                    Err(e) => {
+                        return Some(Condition {
+                            condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED
+                                .to_string(),
+                            status: "Unknown".to_string(),
+                            reason: "ApiKeyReadError".to_string(),
+                            message: e.to_string(),
+                            last_transition_time: now,
+                        });
+                    }
+                },
+                None => String::new(),
+            };
+            match servarr_api::ServarrClient::new(
+                &base_url,
+                &api_key,
+                app_type_to_kind(&app.spec.app),
+            ) {
+                Ok(c) => match c.configure_admin(&username, &password).await {
+                    Ok(()) => Ok(()),
+                    Err(servarr_api::ApiError::ApiResponse { status: 401, .. }) => {
+                        // Auth already enabled but we lack a valid API key to reconfigure.
+                        // Leave the condition unchanged rather than reporting a spurious failure.
+                        return None;
+                    }
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        }
         // Plex: uses plex.tv account auth, not configurable via operator
         // Maintainerr: no credential API exposed
         _ => return None,

@@ -493,6 +493,30 @@ impl ServarrClient {
             }
         }
     }
+
+    /// Configure Forms authentication credentials via `PUT /api/v3/config/host`.
+    ///
+    /// Fetches the current host configuration, sets `authenticationMethod` to
+    /// `"forms"`, and injects the username and password.  Sonarr/Radarr/Lidarr/
+    /// Prowlarr BCrypt-hash the password before storage, so plaintext is safe to
+    /// pass here.
+    ///
+    /// Safe to call when authentication is currently disabled or the app is in
+    /// first-run setup mode (no users yet).
+    ///
+    /// Returns `Err(ApiError::ApiResponse { status: 401, .. })` when auth is
+    /// already enabled and the client has no valid API key.  The caller should
+    /// treat that as "credentials already configured" rather than a fatal error.
+    pub async fn configure_admin(&self, username: &str, password: &str) -> Result<(), ApiError> {
+        let mut config: serde_json::Value = self.http.get("config/host").await?;
+        let id = config.get("id").and_then(|v| v.as_i64()).unwrap_or(1);
+        config["authenticationMethod"] = serde_json::json!("forms");
+        config["username"] = serde_json::json!(username);
+        config["password"] = serde_json::json!(password);
+        config["passwordConfirmation"] = serde_json::json!(password);
+        let _: serde_json::Value = self.http.put(&format!("config/host/{id}"), &config).await?;
+        Ok(())
+    }
 }
 
 impl HealthCheck for ServarrClient {
