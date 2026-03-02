@@ -32,6 +32,8 @@ pub enum Error {
     Kube(#[source] kube::Error),
     #[error("Serialization error: {0}")]
     Serialization(#[source] serde_json::Error),
+    #[error("Internal error: {0}")]
+    Internal(&'static str),
 }
 
 pub fn print_crd() -> Result<()> {
@@ -242,13 +244,17 @@ pub async fn reconcile(stack: Arc<MediaStack>, ctx: Arc<Context>) -> Result<Acti
             let child = ServarrApp::new(child_name, spec.clone());
             let mut child_value = serde_json::to_value(&child).map_err(Error::Serialization)?;
 
-            // Inject metadata
-            let meta = child_value
+            // Inject metadata. serde_json::to_value on a struct always produces
+            // an object, so these casts are guaranteed by the type system.
+            let child_obj = child_value
                 .as_object_mut()
-                .unwrap()
+                .ok_or(Error::Internal("serialized ServarrApp is not a JSON object"))?;
+            let meta = child_obj
                 .entry("metadata")
                 .or_insert_with(|| serde_json::json!({}));
-            let meta_obj = meta.as_object_mut().unwrap();
+            let meta_obj = meta
+                .as_object_mut()
+                .ok_or(Error::Internal("metadata field is not a JSON object"))?;
             meta_obj.insert("namespace".to_string(), serde_json::json!(ns));
             meta_obj.insert(
                 "ownerReferences".to_string(),
