@@ -73,7 +73,8 @@ jobs:
           # previous SHA (skipped for initial branch pushes with no prior commit).
           if [[ "$EVENT" == "pull_request" ]]; then
             changed=$(git diff --name-only "origin/${BASE_REF}...HEAD")
-          elif [[ "$BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+          elif [[ "$BEFORE" != "0000000000000000000000000000000000000000" ]] \
+            && git cat-file -e "$BEFORE" 2>/dev/null; then
             changed=$(git diff --name-only "$BEFORE" HEAD)
           else
             changed=""
