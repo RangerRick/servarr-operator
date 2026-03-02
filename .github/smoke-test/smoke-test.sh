@@ -244,7 +244,8 @@ check_sonarr_auth() {
     location=$(curl -si --max-time 10 \
       -X POST "http://localhost:${lport}/login?returnUrl=%2F" \
       -H 'Content-Type: application/x-www-form-urlencoded' \
-      -d "username=${ADMIN_USER}&password=${ADMIN_PASS}" \
+      --data-urlencode "username=${ADMIN_USER}" \
+      --data-urlencode "password=${ADMIN_PASS}" \
       2>/dev/null | grep -i "^location:" | awk '{print $2}' | tr -d '\r')
 
     if [[ -z "$location" ]]; then
