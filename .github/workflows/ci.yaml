@@ -550,6 +550,7 @@ jobs:
           FROM gcr.io/distroless/static-debian12:nonroot
           ARG TARGETARCH
           COPY servarr-operator-${TARGETARCH} /servarr-operator
+          USER nonroot:nonroot
           ENTRYPOINT ["/servarr-operator"]
           DOCKERFILE
 
