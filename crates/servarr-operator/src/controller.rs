@@ -586,8 +586,10 @@ async fn ensure_api_key_secret(client: &Client, app: &ServarrApp, ns: &str) -> R
     let secret_api = Api::<Secret>::namespaced(client.clone(), ns);
 
     // Only create if the Secret does not already exist.
-    if secret_api.get(secret_name).await.is_ok() {
-        return Ok(());
+    match secret_api.get(secret_name).await {
+        Ok(_) => return Ok(()),
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(e) => return Err(Error::Kube(e)),
     }
 
     use rand::Rng as _;
