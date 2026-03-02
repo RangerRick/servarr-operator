@@ -131,8 +131,14 @@ echo "Phase 3: adminCredentials transition — patching MediaStack to add creden
 # Capture current deployment generation for each media app before patching.
 # We wait for the generation to increase (operator reconciled + patched the
 # Deployment) and then for the rollout to complete (new pods ready).
+#
+# Only apps whose Deployments change when adminCredentials is added are checked:
+#   - media-sonarr:      checksum annotation triggers a rolling update
+#   - media-transmission: FILE__USER/FILE__PASS env vars trigger a rolling update
+# media-jellyfin is excluded: auth is configured via live API only, so the
+# Deployment spec never changes and no rolling update is triggered.
 declare -A PRE_GEN
-for app in media-sonarr media-jellyfin media-transmission; do
+for app in media-sonarr media-transmission; do
   PRE_GEN[$app]=$(kubectl get deployment "$app" \
     -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "1")
 done
@@ -140,12 +146,12 @@ done
 kubectl patch mediastack media --type=merge \
   -p '{"spec":{"defaults":{"adminCredentials":{"secretName":"smoke-admin"}}}}'
 
-echo "  Patch applied.  Waiting for media-* rollouts to complete (up to 300s)..."
+echo "  Patch applied.  Waiting for media-sonarr and media-transmission rollouts to complete (up to 300s)..."
 TRANSITION_TIMEOUT=300
 elapsed=0
 while true; do
   all_done=true
-  for app in media-sonarr media-jellyfin media-transmission; do
+  for app in media-sonarr media-transmission; do
     gen=$(kubectl get deployment "$app" \
       -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "${PRE_GEN[$app]}")
     obs=$(kubectl get deployment "$app" \
@@ -183,7 +189,7 @@ done
 # Phase 4: Admin credential verification
 #
 # The MediaStack now has adminCredentials pointing at the 'smoke-admin' Secret.
-# The operator injects env vars for Sonarr and calls the API for
+# The operator calls PUT /api/v3/config/host for Sonarr and calls the API for
 # Jellyfin/Transmission.  We verify each mechanism works.
 # ---------------------------------------------------------------------------
 
