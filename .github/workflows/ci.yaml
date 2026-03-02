@@ -23,12 +23,22 @@ jobs:
     outputs:
       full_build: ${{ steps.parse.outputs.full_build }}
       run_smoke: ${{ steps.parse.outputs.run_smoke }}
+      smoke_files_changed: ${{ steps.parse.outputs.smoke_files_changed }}
+      crd_files_changed: ${{ steps.parse.outputs.crd_files_changed }}
     steps:
-      - name: Parse commit message flags
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Detect CI flags and changed paths
         id: parse
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
           EVENT: ${{ github.event_name }}
         run: |
           if [[ "$EVENT" == "pull_request" ]]; then
@@ -38,10 +48,29 @@ jobs:
           fi
           full_build=false
           run_smoke=false
+          smoke_files_changed=false
+          crd_files_changed=false
           [[ "$msg" == *"[full-build]"* ]] && full_build=true
           [[ "$msg" == *"[smoke]"* ]] && run_smoke=true
-          echo "full_build=$full_build" >> "$GITHUB_OUTPUT"
-          echo "run_smoke=$run_smoke" >> "$GITHUB_OUTPUT"
+          # Detect modifications to smoke-test files or CRD sources.
+          # PRs: diff against the base branch.  Pushes: diff against the
+          # previous SHA (skipped for initial branch pushes with no prior commit).
+          if [[ "$EVENT" == "pull_request" ]]; then
+            changed=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          elif [[ "$BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            changed=$(git diff --name-only "$BEFORE" HEAD)
+          else
+            changed=""
+          fi
+          echo "$changed" | grep -q "^\.github/smoke-test/" && smoke_files_changed=true || true
+          echo "$changed" | grep -qE "^(charts/servarr-crds/|crates/servarr-resources/)" \
+            && crd_files_changed=true || true
+          {
+            echo "full_build=$full_build"
+            echo "run_smoke=$run_smoke"
+            echo "smoke_files_changed=$smoke_files_changed"
+            echo "crd_files_changed=$crd_files_changed"
+          } >> "$GITHUB_OUTPUT"
 
   # ── Stage 1: Fast lint (seconds) ─────────────────────────────────
   fmt:
@@ -287,13 +316,16 @@ jobs:
 
   # ── Stage 3: Integration smoke test ─────────────────────────────
   # Runs automatically on main and workflow_dispatch.
-  # On branches: include [smoke] in the commit message or PR title to opt in.
+  # On branches: also runs when .github/smoke-test/** or CRD sources change,
+  # or when [smoke] appears in the commit message / PR title.
   smoke-test:
     needs: [build, clippy, test, helm-lint, crd-drift, detect-flags]
     if: >-
       github.ref == 'refs/heads/main' ||
       github.event_name == 'workflow_dispatch' ||
-      needs.detect-flags.outputs.run_smoke == 'true'
+      needs.detect-flags.outputs.run_smoke == 'true' ||
+      needs.detect-flags.outputs.smoke_files_changed == 'true' ||
+      needs.detect-flags.outputs.crd_files_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
