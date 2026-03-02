@@ -91,7 +91,7 @@ impl TransmissionClient {
                 headers.insert(
                     reqwest::header::AUTHORIZATION,
                     HeaderValue::from_str(&format!("Basic {credentials}"))
-                        .unwrap_or_else(|_| HeaderValue::from_static("")),
+                        .map_err(|_| ApiError::InvalidApiKey)?,
                 );
                 headers
             });
