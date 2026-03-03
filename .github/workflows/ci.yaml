@@ -650,11 +650,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DATE: ${{ needs.version.outputs.date }}
         run: |
+          # Rename binaries so each has a unique filename — GitHub Releases
+          # uses the filename as the asset name, so uploading multiple files
+          # named "servarr-operator" would result in duplicate-name errors.
+          cp /tmp/bin-amd64/servarr-operator       /tmp/servarr-operator-linux-x86_64
+          cp /tmp/bin-arm64/servarr-operator        /tmp/servarr-operator-linux-aarch64
+          cp /tmp/bin-darwin-amd64/servarr-operator /tmp/servarr-operator-darwin-x86_64
+          cp /tmp/bin-darwin-arm64/servarr-operator /tmp/servarr-operator-darwin-aarch64
           chmod +x \
-            /tmp/bin-amd64/servarr-operator \
-            /tmp/bin-arm64/servarr-operator \
-            /tmp/bin-darwin-amd64/servarr-operator \
-            /tmp/bin-darwin-arm64/servarr-operator
+            /tmp/servarr-operator-linux-x86_64 \
+            /tmp/servarr-operator-linux-aarch64 \
+            /tmp/servarr-operator-darwin-x86_64 \
+            /tmp/servarr-operator-darwin-aarch64
 
           tag="snapshot-${DATE}"
           # Replace any existing release for this date tag.
@@ -664,7 +671,7 @@ jobs:
             --title "Snapshot ${DATE}" \
             --generate-notes \
             --target "${GITHUB_SHA}" \
-            "/tmp/bin-amd64/servarr-operator#servarr-operator-linux-x86_64" \
-            "/tmp/bin-arm64/servarr-operator#servarr-operator-linux-aarch64" \
-            "/tmp/bin-darwin-amd64/servarr-operator#servarr-operator-darwin-x86_64" \
-            "/tmp/bin-darwin-arm64/servarr-operator#servarr-operator-darwin-aarch64"
+            /tmp/servarr-operator-linux-x86_64 \
+            /tmp/servarr-operator-linux-aarch64 \
+            /tmp/servarr-operator-darwin-x86_64 \
+            /tmp/servarr-operator-darwin-aarch64
