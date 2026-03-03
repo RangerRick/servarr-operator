@@ -117,52 +117,91 @@ fi
 echo "Smoke tests passed."
 
 # ---------------------------------------------------------------------------
-# Phase 3: Admin credential verification
+# Phase 3: adminCredentials transition
 #
-# The MediaStack named 'media' is deployed with adminCredentials pointing at
-# the 'smoke-admin' Secret.  The operator injects env vars for Sonarr and
-# calls the API for Jellyfin/Transmission.  We verify each mechanism works.
+# The MediaStack 'media' was deployed WITHOUT adminCredentials.  Patch it now
+# to add them, which exercises the reconcile path that applies credentials to
+# already-running apps.  This transition is the most likely source of bugs
+# (the first-time credential injection code path).
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "Phase 3: Admin credential verification (MediaStack 'media')"
+echo "Phase 3: adminCredentials transition — patching MediaStack to add credentials"
 
-ADMIN_USER=$(kubectl get secret smoke-admin -o jsonpath='{.data.username}' | base64 -d)
-ADMIN_PASS=$(kubectl get secret smoke-admin -o jsonpath='{.data.password}' | base64 -d)
+# Capture current deployment generation for each media app before patching.
+# We wait for the generation to increase (operator reconciled + patched the
+# Deployment) and then for the rollout to complete (new pods ready).
+#
+# Only apps whose Deployments change when adminCredentials is added are checked:
+#   - media-sonarr:      checksum annotation triggers a rolling update
+#   - media-transmission: FILE__USER/FILE__PASS env vars trigger a rolling update
+# media-jellyfin is excluded: auth is configured via live API only, so the
+# Deployment spec never changes and no rolling update is triggered.
+declare -A PRE_GEN
+for app in media-sonarr media-transmission; do
+  PRE_GEN[$app]=$(kubectl get deployment "$app" \
+    -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "1")
+done
 
-# Wait for the media-* deployments to be ready and for the operator to sync
-# credentials (sync happens after each app passes its health check).
-# Use a generous timeout: Jellyfin is heavy and the operator may trigger a
-# rolling restart when it first patches the checksum annotation.
-echo "  Waiting for media-* deployments and credential sync (up to 300s)..."
-MEDIA_APPS=(media-sonarr media-jellyfin media-transmission)
-CRED_TIMEOUT=300
+kubectl patch mediastack media --type=merge \
+  -p '{"spec":{"defaults":{"adminCredentials":{"secretName":"smoke-admin"}}}}'
+
+echo "  Patch applied.  Waiting for media-sonarr and media-transmission rollouts to complete (up to 300s)..."
+TRANSITION_TIMEOUT=300
 elapsed=0
 while true; do
-  all_ready=true
-  for app in "${MEDIA_APPS[@]}"; do
-    ready=$(kubectl get deployment "$app" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-    if [[ "${ready:-0}" -lt 1 ]]; then
-      all_ready=false
+  all_done=true
+  for app in media-sonarr media-transmission; do
+    gen=$(kubectl get deployment "$app" \
+      -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "${PRE_GEN[$app]}")
+    obs=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo "0")
+    updated=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.updatedReplicas}' 2>/dev/null || echo "0")
+    desired=$(kubectl get deployment "$app" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+    ready=$(kubectl get deployment "$app" \
+      -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    # Wait for the operator to bump the generation AND the rollout to complete.
+    if [[ "$gen" -le "${PRE_GEN[$app]}" \
+        || "$obs" -lt "$gen" \
+        || "${updated:-0}" -lt "${desired:-1}" \
+        || "${ready:-0}" -lt "${desired:-1}" ]]; then
+      all_done=false
       break
     fi
   done
-  if $all_ready; then
-    echo "  All media-* deployments are ready."
+  if $all_done; then
+    echo "  All media-* deployments completed their rollout."
     break
   fi
-  if [[ $elapsed -ge $CRED_TIMEOUT ]]; then
-    echo "  WARNING: media-* deployments not all ready after ${CRED_TIMEOUT}s — skipping Phase 3"
-    echo "Smoke tests passed (Phase 3 skipped)."
-    exit 0
+  if [[ $elapsed -ge $TRANSITION_TIMEOUT ]]; then
+    echo "ERROR: media-* rollouts not complete after credential transition (${TRANSITION_TIMEOUT}s)"
+    kubectl get deployments -l "app.kubernetes.io/instance=media" -o wide
+    exit 1
   fi
-  echo "  Waiting for media-* deployments... (${elapsed}s/${CRED_TIMEOUT}s)"
+  echo "  Waiting... (${elapsed}s/${TRANSITION_TIMEOUT}s)"
   sleep 10
   elapsed=$((elapsed + 10))
 done
 
-# Extra dwell time for the operator to finish the credential-sync API calls.
-# Jellyfin's startup wizard can take a moment to respond after first boot.
+# ---------------------------------------------------------------------------
+# Phase 4: Admin credential verification
+#
+# The MediaStack now has adminCredentials pointing at the 'smoke-admin' Secret.
+# The operator calls PUT /api/v3/config/host for Sonarr and calls the API for
+# Jellyfin/Transmission.  We verify each mechanism works.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "Phase 4: Admin credential verification (MediaStack 'media')"
+
+ADMIN_USER=$(kubectl get secret smoke-admin -o jsonpath='{.data.username}' | base64 -d)
+ADMIN_PASS=$(kubectl get secret smoke-admin -o jsonpath='{.data.password}' | base64 -d)
+
+# All media-* deployments are already confirmed ready by Phase 3.
+# Extra dwell time for the operator to finish live API credential-sync calls
+# (Jellyfin startup wizard can take a moment to respond after first boot).
 sleep 40
 
 # Helper: port-forward to a deployment, run a check function, then clean up.
@@ -182,19 +221,82 @@ with_port_forward() {
 cred_pass=0
 cred_fail=0
 
-# --- Sonarr: env vars cause Forms auth → unauthenticated API returns 401 ---
+# --- Sonarr: operator applies Forms auth credentials via PUT /api/v3/config/host.
+#
+# Verification sequence:
+#   1. Unauthenticated API call returns 401 (Forms auth enforced).
+#   2. GET /login returns 200 — the login page is shown, not the first-run
+#      setup wizard (which would mean credentials were never applied).
+#   3. POST /login with correct credentials redirects to the dashboard (not
+#      back to /login?loginFailed=...).
+#
+# Retry up to 60s because Sonarr may still be initialising on first boot. ---
 check_sonarr_auth() {
   local lport=$1
-  local status
-  status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    "http://localhost:${lport}/api/v3/system/status" 2>/dev/null || echo "000")
-  if [[ "$status" == "401" ]]; then
-    echo "  media-sonarr: OK (Forms auth enforced — unauthenticated API returns 401)"
+
+  local deadline=$(( $(date +%s) + 60 ))
+  while true; do
+    # Step 1: unauthenticated API must return 401.
+    local status_api
+    status_api=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      "http://localhost:${lport}/api/v3/system/status" 2>/dev/null || echo "000")
+
+    if [[ "$status_api" != "401" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (expected unauthenticated API to return 401, got ${status_api})"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 2: /login must return 200 (not a redirect to the setup wizard).
+    local login_status
+    login_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+      -L "http://localhost:${lport}/login" 2>/dev/null || echo "000")
+
+    if [[ "$login_status" != "200" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (expected /login to return 200, got ${login_status}" \
+             "— first-run setup wizard may still be active)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    # Step 3: POST /login with correct credentials must redirect to the
+    # dashboard.  A redirect back to /login (with loginFailed) means the
+    # credentials were not applied.
+    local location
+    location=$(curl -si --max-time 10 \
+      -X POST "http://localhost:${lport}/login?returnUrl=%2F" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode "username=${ADMIN_USER}" \
+      --data-urlencode "password=${ADMIN_PASS}" \
+      2>/dev/null | grep -i "^location:" | awk '{print $2}' | tr -d '\r')
+
+    if [[ -z "$location" ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (POST /login returned no Location header)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    if [[ "$location" == *"/login"* ]]; then
+      if [[ $(date +%s) -ge $deadline ]]; then
+        echo "  media-sonarr: FAIL (POST /login redirected to ${location} — credentials rejected)"
+        return 1
+      fi
+      sleep 10
+      continue
+    fi
+
+    echo "  media-sonarr: OK (Forms auth: unauth API=401, login page reachable, credentials authenticate)"
     return 0
-  else
-    echo "  media-sonarr: FAIL (expected 401 for unauthenticated API request, got ${status})"
-    return 1
-  fi
+  done
 }
 
 echo -n ""

@@ -1,6 +1,7 @@
 use reqwest::header::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use url::Url;
 
@@ -90,14 +91,18 @@ impl TransmissionClient {
                 headers.insert(
                     reqwest::header::AUTHORIZATION,
                     HeaderValue::from_str(&format!("Basic {credentials}"))
-                        .unwrap_or_else(|_| HeaderValue::from_static("")),
+                        .map_err(|_| ApiError::InvalidApiKey)?,
                 );
                 headers
             });
         }
 
         Ok(Self {
-            inner: builder.build().map_err(ApiError::Request)?,
+            inner: builder
+                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .map_err(ApiError::Request)?,
             rpc_url,
             session_id: Arc::new(RwLock::new(None)),
         })

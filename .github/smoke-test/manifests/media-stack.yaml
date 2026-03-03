@@ -3,10 +3,8 @@ kind: MediaStack
 metadata:
   name: media
 spec:
-  defaults:
-    adminCredentials:
-      secretName: smoke-admin
   apps:
     - app: Jellyfin
     - app: Transmission
     - app: Sonarr
+      apiKeySecret: smoke-sonarr-api-key

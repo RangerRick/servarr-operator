@@ -3285,92 +3285,59 @@ fn get_env(app: &ServarrApp) -> Vec<k8s_openapi::api::core::v1::EnvVar> {
         .unwrap_or_default()
 }
 
-fn secret_key_ref_name(
-    env: &[k8s_openapi::api::core::v1::EnvVar],
-    var_name: &str,
-) -> Option<String> {
-    find_env(env, var_name).and_then(|e| {
-        e.value_from
-            .as_ref()
-            .and_then(|vf| vf.secret_key_ref.as_ref())
-            .map(|skr| skr.name.clone())
-    })
-}
-
 #[test]
-fn test_admin_credentials_sonarr_injects_env_vars() {
+fn test_admin_credentials_sonarr_no_auth_env_vars() {
+    // Auth is configured via PUT /api/v3/config/host, not env vars.
+    // Env var injection caused Sonarr to store plaintext passwords (not BCrypt-hashed),
+    // making login always fail.
     let mut app = make_app(AppType::Sonarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "my-admin".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "SONARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
-    assert_eq!(
-        secret_key_ref_name(&env, "SONARR__AUTH__USERNAME"),
-        Some("my-admin".into())
-    );
-    assert_eq!(
-        secret_key_ref_name(&env, "SONARR__AUTH__PASSWORD"),
-        Some("my-admin".into())
-    );
+    assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "SONARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_radarr_injects_env_vars() {
+fn test_admin_credentials_radarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Radarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "radarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "RADARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "RADARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "RADARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "RADARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "RADARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "RADARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_lidarr_injects_env_vars() {
+fn test_admin_credentials_lidarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Lidarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "lidarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "LIDARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "LIDARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "LIDARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "LIDARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "LIDARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "LIDARR__AUTH__METHOD").is_none());
 }
 
 #[test]
-fn test_admin_credentials_prowlarr_injects_env_vars() {
+fn test_admin_credentials_prowlarr_no_auth_env_vars() {
     let mut app = make_app(AppType::Prowlarr);
     app.spec.admin_credentials = Some(AdminCredentialsSpec {
         secret_name: "prowlarr-creds".into(),
     });
     let env = get_env(&app);
 
-    assert!(find_env(&env, "PROWLARR__AUTH__USERNAME").is_some());
-    assert!(find_env(&env, "PROWLARR__AUTH__PASSWORD").is_some());
-    assert_eq!(
-        find_env(&env, "PROWLARR__AUTH__METHOD")
-            .and_then(|e| e.value.as_deref().map(|s| s.to_string())),
-        Some("Forms".into())
-    );
+    assert!(find_env(&env, "PROWLARR__AUTH__USERNAME").is_none());
+    assert!(find_env(&env, "PROWLARR__AUTH__PASSWORD").is_none());
+    assert!(find_env(&env, "PROWLARR__AUTH__METHOD").is_none());
 }
 
 #[test]
@@ -3551,4 +3518,75 @@ fn test_admin_credentials_not_set_no_auth_env_vars() {
     assert!(find_env(&env, "SONARR__AUTH__USERNAME").is_none());
     assert!(find_env(&env, "SONARR__AUTH__PASSWORD").is_none());
     assert!(find_env(&env, "SONARR__AUTH__METHOD").is_none());
+}
+
+/// Verify that DynamicObject serializes apiVersion and kind correctly after the
+/// from_value() round-trip used in httproute::build and certificate::build.
+/// If apiVersion/kind are missing, SSA patches fail with "invalid object type: /, Kind=".
+#[test]
+fn test_dynamic_object_serialization_preserves_type_meta() {
+    let route_json = serde_json::json!({
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "HTTPRoute",
+        "metadata": {"name": "test", "namespace": "test-ns"},
+        "spec": {"rules": []}
+    });
+    let route: kube::api::DynamicObject =
+        serde_json::from_value(route_json).expect("from_value should succeed");
+    let serialized = serde_json::to_value(&route).expect("to_value should succeed");
+
+    assert_eq!(
+        serialized["apiVersion"].as_str(),
+        Some("gateway.networking.k8s.io/v1"),
+        "apiVersion must survive DynamicObject round-trip"
+    );
+    assert_eq!(
+        serialized["kind"].as_str(),
+        Some("HTTPRoute"),
+        "kind must survive DynamicObject round-trip"
+    );
+}
+
+/// Same check for httproute::build output.
+#[test]
+fn test_httproute_ssa_body_has_type_meta() {
+    use servarr_crds::{GatewayParentRef, GatewaySpec, RouteType};
+    let app = ServarrApp {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some("test-app".into()),
+            namespace: Some("media".into()),
+            uid: Some("test-uid".into()),
+            ..Default::default()
+        },
+        spec: ServarrAppSpec {
+            app: AppType::Sonarr,
+            gateway: Some(GatewaySpec {
+                enabled: true,
+                route_type: RouteType::Http,
+                parent_refs: vec![GatewayParentRef {
+                    name: "test-gw".into(),
+                    namespace: String::new(),
+                    section_name: String::new(),
+                }],
+                hosts: vec!["sonarr.example.com".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        status: None,
+    };
+
+    let route = servarr_resources::httproute::build(&app).expect("should build HTTPRoute");
+    let body = serde_json::to_value(&route).expect("should serialize");
+
+    assert_eq!(
+        body["apiVersion"].as_str(),
+        Some("gateway.networking.k8s.io/v1"),
+        "SSA body must contain apiVersion"
+    );
+    assert_eq!(
+        body["kind"].as_str(),
+        Some("HTTPRoute"),
+        "SSA body must contain kind"
+    );
 }

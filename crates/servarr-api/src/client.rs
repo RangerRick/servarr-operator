@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -44,6 +46,8 @@ impl HttpClient {
 
         let inner = reqwest::Client::builder()
             .default_headers(headers)
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .build()?;
 
         Ok(Self { inner, base_url })

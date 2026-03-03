@@ -240,6 +240,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Build and apply Deployment
     let deployment = servarr_resources::deployment::build(&app, &ctx.image_overrides);
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), &ns);
+    tracing::debug!(%name, "SSA: applying Deployment");
     deploy_api
         .patch(&name, &pp, &Patch::Apply(&deployment))
         .await
@@ -248,6 +249,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Check for drift: read back the Deployment and compare only operator-managed fields.
     // Kubernetes adds default fields (terminationGracePeriodSeconds, dnsPolicy, etc.)
     // so we check that our desired fields are a subset of the actual state.
+    tracing::debug!(%name, "getting Deployment for drift check");
     let applied_deploy = deploy_api.get(&name).await.map_err(Error::Kube)?;
     if let (Some(desired_spec), Some(actual_spec)) =
         (deployment.spec.as_ref(), applied_deploy.spec.as_ref())
@@ -273,6 +275,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
                 .map_err(Error::Kube)?;
             increment_drift_corrections(app_type, &ns, "Deployment");
             // Re-apply to correct drift
+            tracing::debug!(%name, "SSA: re-applying Deployment (drift correction)");
             deploy_api
                 .patch(&name, &pp, &Patch::Apply(&deployment))
                 .await
@@ -283,6 +286,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     // Build and apply Service
     let service = servarr_resources::service::build(&app);
     let svc_api = Api::<Service>::namespaced(client.clone(), &ns);
+    tracing::debug!(%name, "SSA: applying Service");
     svc_api
         .patch(&name, &pp, &Patch::Apply(&service))
         .await
@@ -321,6 +325,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if network_policy_enabled {
         let np = servarr_resources::networkpolicy::build(&app);
         let np_api = Api::<NetworkPolicy>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, "SSA: applying NetworkPolicy");
         np_api
             .patch(&name, &pp, &Patch::Apply(&np))
             .await
@@ -331,6 +336,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -341,6 +347,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_tar_unpack(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying tar-unpack ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -351,6 +358,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_prowlarr_definitions(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying Prowlarr definitions ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -359,23 +367,23 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
 
     // Auto-create API key Secret if apiKeySecret is set and the Secret is absent.
     // Uses a get-then-create pattern so an existing key is never overwritten.
+    tracing::debug!(%name, "ensuring API key secret");
     ensure_api_key_secret(client, &app, &ns).await?;
 
-    // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) admin credentials are
-    // injected as secretKeyRef env vars at startup.  Patch a checksum annotation
-    // so Kubernetes rolls the pods when the Secret rotates.
+    // For Servarr v3 apps (Sonarr/Radarr/Lidarr/Prowlarr) credentials are applied
+    // via PUT /api/v3/config/host after each pod start (sync_admin_credentials).
+    // Patch a checksum annotation on the pod template so Kubernetes rolls pods
+    // when the Secret rotates, giving sync_admin_credentials a fresh target.
     //
-    // API-based apps (Jellyfin, Transmission, Tautulli, Overseerr) receive
-    // credentials via sync_admin_credentials on every reconcile — they do NOT
-    // need a rolling restart.  Transmission in particular MUST NOT get a
-    // checksum annotation: the LSIO init script rewrites settings.json on every
-    // container start, so a rolling update would race and reset auth to false
-    // before the operator's next reconcile can re-apply it via RPC.
-    let uses_env_var_creds = matches!(
+    // Transmission MUST NOT get a checksum annotation: the LSIO init script
+    // rewrites settings.json on every container start, so a rolling update would
+    // race and reset auth to false before the next reconcile can re-apply it.
+    let needs_rollout_on_secret_change = matches!(
         app.spec.app,
         AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
     );
-    if uses_env_var_creds && let Some(ref ac) = app.spec.admin_credentials {
+    if needs_rollout_on_secret_change && let Some(ref ac) = app.spec.admin_credentials {
+        tracing::debug!(%name, secret_name = %ac.secret_name, "patching admin credentials checksum");
         patch_admin_credentials_checksum(client, &app, &ns, &ac.secret_name).await?;
     }
 
@@ -383,6 +391,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(secret) = servarr_resources::secret::build_authorized_keys(&app) {
         let secret_name = secret.metadata.name.as_deref().unwrap_or(&name);
         let secret_api = Api::<Secret>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, secret_name, "SSA: applying SSH bastion authorized-keys Secret");
         secret_api
             .patch(secret_name, &pp, &Patch::Apply(&secret))
             .await
@@ -393,6 +402,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     if let Some(cm) = servarr_resources::configmap::build_ssh_bastion_restricted_rsync(&app) {
         let cm_name = cm.metadata.name.as_deref().unwrap_or(&name);
         let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &ns);
+        tracing::debug!(%name, cm_name, "SSA: applying SSH bastion restricted-rsync ConfigMap");
         cm_api
             .patch(cm_name, &pp, &Patch::Apply(&cm))
             .await
@@ -413,6 +423,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let route_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let route_data = serde_json::to_value(&route).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying TCPRoute");
         route_api
             .patch(&name, &pp, &Patch::Apply(route_data))
             .await
@@ -428,6 +439,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let route_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let route_data = serde_json::to_value(&route).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying HTTPRoute");
         route_api
             .patch(&name, &pp, &Patch::Apply(route_data))
             .await
@@ -446,6 +458,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
         let cert_api =
             Api::<kube::api::DynamicObject>::namespaced_with(client.clone(), &ns, &api_resource);
         let cert_data = serde_json::to_value(&cert).map_err(Error::Serialization)?;
+        tracing::debug!(%name, "SSA: applying Certificate");
         cert_api
             .patch(&name, &pp, &Patch::Apply(cert_data))
             .await
@@ -490,6 +503,7 @@ pub async fn reconcile(app: Arc<ServarrApp>, ctx: Arc<Context>) -> Result<Action
     }
 
     // Update status
+    tracing::debug!(%name, "updating status");
     update_status(
         client,
         &app,
@@ -569,8 +583,10 @@ async fn ensure_api_key_secret(client: &Client, app: &ServarrApp, ns: &str) -> R
     let secret_api = Api::<Secret>::namespaced(client.clone(), ns);
 
     // Only create if the Secret does not already exist.
-    if secret_api.get(secret_name).await.is_ok() {
-        return Ok(());
+    match secret_api.get(secret_name).await {
+        Ok(_) => return Ok(()),
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(e) => return Err(Error::Kube(e)),
     }
 
     use rand::Rng as _;
@@ -637,7 +653,13 @@ async fn patch_admin_credentials_checksum(
 
     let name = app.name_any();
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), ns);
+    // Use a separate field manager so this annotation does not conflict with
+    // the main SSA apply (FIELD_MANAGER), which would strip it on the next cycle.
+    let pp = PatchParams::apply("servarr-operator/admin-credentials").force();
     let patch = serde_json::json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": { "name": name },
         "spec": {
             "template": {
                 "metadata": {
@@ -649,7 +671,7 @@ async fn patch_admin_credentials_checksum(
         }
     });
     deploy_api
-        .patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+        .patch(&name, &pp, &Patch::Apply(patch))
         .await
         .map_err(Error::Kube)?;
 
@@ -813,7 +835,43 @@ async fn sync_admin_credentials(client: &Client, app: &ServarrApp, ns: &str) -> 
                 .await
                 .map_err(|e| e.to_string())
         }
-        // Servarr v3 apps: handled by env vars + checksum annotation (see deployment builder)
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr => {
+            let api_key = match app.spec.api_key_secret.as_deref() {
+                Some(s) => match servarr_api::read_secret_key(client, ns, s, "api-key").await {
+                    Ok(k) => k,
+                    Err(e) => {
+                        return Some(Condition {
+                            condition_type: condition_types::ADMIN_CREDENTIALS_CONFIGURED
+                                .to_string(),
+                            status: "Unknown".to_string(),
+                            reason: "ApiKeyReadError".to_string(),
+                            message: e.to_string(),
+                            last_transition_time: now,
+                        });
+                    }
+                },
+                None => String::new(),
+            };
+            match servarr_api::ServarrClient::new(
+                &base_url,
+                &api_key,
+                app_type_to_kind(&app.spec.app),
+            ) {
+                Ok(c) => match c.configure_admin(&username, &password).await {
+                    Ok(()) => Ok(()),
+                    Err(servarr_api::ApiError::ApiResponse { status: 401, .. }) => {
+                        // Auth is already enabled and we have no valid API key to reach it.
+                        // This can happen if the pod started with stale auth env vars or was
+                        // configured out-of-band.  Leave the condition unchanged; the operator
+                        // will retry on the next reconcile (triggered by pod/Deployment events).
+                        warn!(app = %app.name_any(), "admin-credentials: configure_admin returned 401 — auth already active, no api key");
+                        return None;
+                    }
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        }
         // Plex: uses plex.tv account auth, not configurable via operator
         // Maintainerr: no credential API exposed
         _ => return None,
@@ -1335,6 +1393,15 @@ async fn maybe_restore_backup(
     recorder: &Recorder,
     obj_ref: &k8s_openapi::api::core::v1::ObjectReference,
 ) {
+    // Only Servarr v3 apps support backup/restore API
+    if !matches!(
+        app.spec.app,
+        AppType::Sonarr | AppType::Radarr | AppType::Lidarr | AppType::Prowlarr
+    ) {
+        warn!(%name, app_type = ?app.spec.app, "restore-from annotation set on unsupported app type, ignoring");
+        return;
+    }
+
     let backup_id: i64 = match restore_id.parse() {
         Ok(id) => id,
         Err(_) => {

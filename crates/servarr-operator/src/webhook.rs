@@ -421,6 +421,7 @@ async fn validate_no_duplicate_instance(
         Ok(list) => list,
         Err(e) => {
             warn!(error = %e, "failed to list ServarrApps for duplicate check");
+            errors.push(format!("failed to check for duplicate instances: {e}"));
             return;
         }
     };
